@@ -1,5 +1,6 @@
 #!/bin/sh
 
+# core-states holds the Core States backups, which are never pruned.
 prune_backups() {
 	local keep="${1:-5}"
 	local protected="${2:-}"
@@ -7,7 +8,7 @@ prune_backups() {
 	local count=0 backup
 
 	find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d \
-		! -name '*.incomplete' -print 2>/dev/null |
+		! -name '*.incomplete' ! -name core-states -print 2>/dev/null |
 		LC_ALL=C sort -r > "$list" || {
 			rm -f "$list"
 			return 1

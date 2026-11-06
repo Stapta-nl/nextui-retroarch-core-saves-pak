@@ -49,6 +49,37 @@
 			}
 		},
 		{
+			"name": "State Status:",
+			"features": {
+				"is_header": true,
+				"unselectable": true
+			}
+		},
+		{
+			"name": "> State Format:",
+			"options": ["$state_format"],
+			"selected": 0,
+			"features": {
+				"unselectable": true
+			}
+		},
+		{
+			"name": "> States:",
+			"options": ["$states"],
+			"selected": 0,
+			"features": {
+				"unselectable": true
+			}
+		},
+		{
+			"name": "> States Location:",
+			"options": ["$states_location"],
+			"selected": 0,
+			"features": {
+				"unselectable": true
+			}
+		},
+		{
 			"name": " ",
 			"features": {
 				"unselectable": true
@@ -63,6 +94,20 @@
     },
 		{
 			"name": "Revert to NextUI Saves",
+			"features": {
+				"alignment": "right",
+				"unselectable": false
+		  }
+    },
+		{
+			"name": "Enable Core States",
+			"features": {
+				"alignment": "right",
+				"unselectable": false
+		  }
+    },
+		{
+			"name": "Disable Core States",
 			"features": {
 				"alignment": "right",
 				"unselectable": false

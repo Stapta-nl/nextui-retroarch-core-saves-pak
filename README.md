@@ -1,6 +1,6 @@
 # RetroArch Core Saves.pak
 
-Tool pak for keeping NextUI saves in RetroArch core-name folders. Automatically converts `.<tag>.sav/.sav` files to RetroArch's `.srm` format and creates folders in `/mnt/SDCARD/Saves/Cores` corresponding to RetroArch Cores. Can also convert all `.<tag>.sav/.sav` files to RetroArch's `.srm` format (even compressing or decompressing them!) and vice versa (See note on Save Ownership).
+Tool pak for keeping NextUI saves, and optionally save states, in RetroArch core-name folders. Automatically converts `.<tag>.sav/.sav` files to RetroArch's `.srm` format and creates folders in `/mnt/SDCARD/Saves/Cores` corresponding to RetroArch Cores. Can also convert all `.<tag>.sav/.sav` files to RetroArch's `.srm` format (even compressing or decompressing them!) and vice versa (See note on Save Ownership).
 
 After running, saves will be in:
 
@@ -82,6 +82,139 @@ Available actions depend on current state.
 5. Registers its mounts with mountctl, which mounts them at every boot
 6. Mounts folders
 
+
+## Core States
+
+Optional and independent of Core Saves: either, both or neither can be on. Off by
+default. It does for save states what Core Saves does for saves, so a desktop
+RetroArch can sync each core's states folder with Syncthing without per-system
+mapping.
+
+NextUI keeps states in `.userdata/shared/<TAG>-<core>`, where `<core>` is the
+emulator's core file name (`GB-gambatte`, `GBC-gambatte`, `SFC-snes9x`). Enabling
+Core States moves them into one folder per core and bind-mounts that folder back
+over each NextUI folder:
+
+```text
+/mnt/SDCARD/States/Cores/Gambatte/Game.state
+/mnt/SDCARD/States/Cores/Gambatte/Game.state1
+/mnt/SDCARD/States/Cores/Gambatte/Game.state.auto
+
+.userdata/shared/GB-gambatte  -> /mnt/SDCARD/States/Cores/Gambatte
+.userdata/shared/GBC-gambatte -> /mnt/SDCARD/States/Cores/Gambatte
+```
+
+The folders are named after the libretro library name, exactly like `/Saves/Cores`
+(`Gambatte`, `Snes9x`, `gpSP`), which is the layout desktop RetroArch uses when
+its states are sorted into folders by core.
+
+**Point Syncthing at `/mnt/SDCARD/States/Cores`** (and RetroArch's states folder at
+the other end). Like the NextUI folders it replaces, the tag folders under
+`.userdata/shared` are runtime aliases and should not be synced themselves.
+
+### Why a separate tree
+
+States are deliberately not stored inside `/Saves/Cores/<core>`. Reverting Core
+Saves copies every file of a core folder into `/Saves/<tag>`, and Core Saves
+backups and rollbacks rewrite `/Saves` wholesale, which would pull the mount
+source out from under the states mounts. A sibling tree keeps the two features
+from touching each other's files.
+
+### Enabling
+
+1. Records the current state format in `states-enabled` so it can be restored.
+2. Backs up the existing NextUI states folders and `minuisettings.txt`.
+3. Renames and copies every state into `/States/Cores/<core>`.
+4. Sets the NextUI state format to **RetroArch (compressed)**.
+5. Registers the mounts as mountctl layer 30 (`30-core-states.sh`) and mounts them.
+6. Writes what was converted, skipped or failed to the conversion report.
+
+NextUI picks up a changed format the next time a game starts, so no restart is
+needed. Only file names change; the state data itself is never rewritten. MinArch
+reads compressed and uncompressed states, with or without RetroArch's header, and
+the format setting only decides what it writes next, so renaming is lossless and
+reversible. Files that are not state names (`notes.txt`) are copied unchanged,
+because the NextUI folder is hidden under the mount afterwards.
+
+| Slot | NextUI MinUI | RetroArch-ish | RetroArch (used by Core States) |
+| --- | --- | --- | --- |
+| 0 | `Game.gba.st0` | `Game.state.0` | `Game.state` |
+| 1 to 7 | `Game.gba.stN` | `Game.state.N` | `Game.stateN` |
+| 8 (NextUI's hidden default) | `Game.gba.st8` | `Game.state.8` | `Game.state8` |
+| Auto-resume | `Game.gba.st9` | `Game.state.auto` | `Game.state.auto` |
+
+Existing files are sorted by their own names rather than by the setting, because
+NextUI never converts old files when the setting changes. Enabling is safe to
+repeat: it keeps the format recorded the first time, reuses identical files and
+only picks up states that appeared since. If two different files would get the
+same name, both are kept and the second becomes `Game.core-conflict-N.state`.
+
+Keep NextUI's state format on RetroArch while Core States is on. Another format
+makes NextUI write names desktop RetroArch will not read.
+
+### Disabling
+
+Disabling takes the states mounts down, then asks whether to restore the
+original state format. States are copied back into the NextUI folders and nothing
+is ever deleted from `/States/Cores`, because Syncthing would propagate the
+deletion.
+
+- **Restore**: puts the recorded format back and renames the states for it.
+  The MinUI format needs the ROM to recover the extension, so a state without
+  exactly one matching ROM cannot be named for it. When several systems share a
+  core (GB and GBC), each state needs exactly one ROM match to know which system it
+  belongs to. States that cannot be placed stay in `/States/Cores/<core>`, are
+  listed in the conversion report, and **will not load in NextUI** until renamed.
+- **Keep**: leaves the format on RetroArch and copies states back under those names.
+
+### Backups
+
+States are backed up before enabling and before disabling, to
+`.core-saves-backups/core-states/` (per profile under Profiles.pak). Unlike the
+save backups, **these are never pruned**; delete them yourself when you no
+longer need them.
+
+### Important: states are not portable between cores
+
+A state only loads in the same core at a compatible version. Syncing works even
+when loading will not, so a state synced to a device with a different core build
+(or another core for the same console) can fail to load or misbehave. The sync
+moves the file; it cannot make it compatible.
+
+Other things to know:
+
+- The auto-resume state (`.state.auto`) is synced too. A RetroArch with
+  auto-load-state enabled will load it, and the one from the device you powered
+  off last wins.
+- RetroArch writes `.png` thumbnails beside its states. They are harmless and are
+  carried along, but NextUI does not use them: its slot previews and game switcher
+  art are BMPs in `.userdata/shared/.minui`, which are not synced. States synced
+  from another device therefore load from the menu but show no preview, and do
+  not make NextUI offer Resume, which depends on those files.
+- Syncing a state while the emulator is writing it can leave a partial file.
+
+### Profiles
+
+Core States follows the same single-owner rule as Core Saves, using the same
+ownership record in `.profiles/core-saves-profile`: only the owner's states are
+mounted, other profiles are refused, and backups go to the active profile's
+backup folder. Everything is coordinated through mountctl. `/States/Cores` is
+outside `/Saves`, so the Syncthing path is the same with or without Profiles.
+
+### Menu
+
+Core States adds a **State Status** block (format, mount count and location) and
+an **Enable Core States** or **Disable Core States** action. When an emulator is
+installed or removed while enabled, the action becomes **Re-apply Core States
+Mappings**.
+
+### Folder names and mapping
+
+NextUI names a states folder after the emulator's core file, which is the
+`EMU_EXE` of its pak. The `mapping.conf` overrides only provide the library name
+used for the `/States/Cores` folder, so a tag mapped solely by an override and
+with no `EMU_EXE` has no states folder that can be determined. It is reported
+and left alone.
 
 ## Netplay
 
@@ -166,6 +299,7 @@ folder that has files in it, so nothing is ever hidden. Installed on the card:
 ```text
 .userdata/<platform>/Mounts/mountctl.sh                the newest copy any pak shipped
 .userdata/<platform>/Mounts/layers.d/20-core-saves.sh
+.userdata/<platform>/Mounts/layers.d/30-core-states.sh   when Core States is on
 .userdata/<platform>/.hooks/boot.d/00-mounts.sync.sh   applies every layer at boot
 .userdata/<platform>/logs/mounts.txt                   every mount change
 ```
@@ -345,7 +479,7 @@ Their license texts are included under `bin/`.
 
 ## Tests
 
-Run both suites with `make test`, or the host-side migration suite alone with:
+Run all suites with `make test` (the Core Saves, mount and Core States suites), or the host-side migration suite alone with:
 
 ```sh
 "RetroArch Core Saves.pak/bin/tests/test-core-saves.sh"

@@ -171,7 +171,7 @@ export PATH="$DIR/bin/$PLATFORM:$DIR/bin:$PATH"
 LD_LIBRARY_PATH=$(compose_library_path)
 export LD_LIBRARY_PATH
 
-for library in report settings mappings mounts backup save-format audit enable restore; do
+for library in report settings mappings mounts backup save-format audit enable restore states; do
 	. "$DIR/bin/$library.sh" || exit 1
 done
 
@@ -220,6 +220,20 @@ save_format_option() {
 		3) echo 2 ;;
 		*) echo 0 ;;
 	esac
+}
+
+# Asked while disabling Core States. Cancelling here keeps the current format;
+# declining the earlier confirmation is what aborts the whole operation.
+ask_restore_state_format() {
+	local old
+
+	old=$(states_marker_value old_format)
+	[ -n "$old" ] || return 1
+	command -v minui-presenter >/dev/null 2>&1 || return 1
+	minui-presenter \
+		--message "Restore the state format from before Core States ($(state_format_name "$old"))? States that cannot be renamed for it will not load in NextUI; they stay in /States/Cores and in the backup." \
+		--confirm-show --confirm-text "RESTORE" \
+		--cancel-show --cancel-text "KEEP"
 }
 
 mount_status() {
@@ -286,6 +300,7 @@ current_settings() {
 	local mount_rows="/tmp/${PAK_NAME}-mount-rows.tsv"
 	local mount_rows_json="/tmp/${PAK_NAME}-mount-rows.json"
 	local format location mounts active mounts_selectable profile
+	local state_format states_status states_active states_location
 
 	rm -f "$minui_list_file" "$mount_rows" "$mount_rows_json"
 
@@ -298,6 +313,12 @@ current_settings() {
 	[ -f "$ENABLED_FILE" ] && active=true
 
 	mounts=$(mount_status)
+	state_format=$(state_format_name "$(get_state_format)")
+	states_status=$(states_mount_status)
+	states_active=false
+	[ -f "$STATES_ENABLED_FILE" ] && states_active=true
+	states_location="/States/Cores"
+	compute_states_status
 
 	has_active_mounts && mounts_selectable=true
 	compute_mapping_status
@@ -320,6 +341,11 @@ current_settings() {
 		--argjson active "$active" \
 		--argjson mounts_selectable "$mounts_selectable" \
 		--arg mapping_summary "$MAPPING_SUMMARY" \
+		--arg state_format "$state_format" \
+		--arg states_status "$states_status" \
+		--arg states_location "$states_location" \
+		--argjson states_active "$states_active" \
+		--argjson states_stale "$STATES_STALE" \
 		--argjson stale "$MAPPING_STALE" \
 		--slurpfile mount_rows "$mount_rows_json" \
 		'.settings |= map(
@@ -334,6 +360,17 @@ current_settings() {
 				| if $mounts_selectable
 					then .features.show_confirm = true
 					else .features |= del(.show_confirm) end
+			elif .name == "> State Format:" then .options = [$state_format]
+			elif .name == "> States:" then .options = [$states_status]
+			elif .name == "> States Location:" then .options = [$states_location]
+			elif .name == "Enable Core States" then
+				(if $states_active | not then .features.unselectable = false
+				elif $states_stale then
+					.name = "Re-apply Core States Mappings"
+					| .features.unselectable = false
+				else empty end)
+			elif .name == "Disable Core States" then
+				(if $states_active then .features.unselectable = false else empty end)
 			elif .name == "Convert to RetroArch Core Saves" then
 				(if $active | not then .features.unselectable = false
 				elif $stale then
@@ -468,6 +505,7 @@ cleanup() {
 	rm -f "/tmp/${PAK_NAME}-mount-rows.json"
 	rm -f "/tmp/${PAK_NAME}-mounts.json"
 	rm -f "/tmp/${PAK_NAME}-mapping-check.conf"
+	rm -f "/tmp/${PAK_NAME}-states-check.conf"
 }
 
 run_action() {
@@ -488,6 +526,22 @@ run_action() {
 		"Revert to NextUI Saves")
 			confirm "Disable boot mounts and restore only saves that map safely to installed systems? Shared-core saves need exactly one matching ROM; unmatched files stay in /Saves/Cores." || return
 			restore_to_legacy current
+			;;
+		"Enable Core States")
+			confirm "Back up states, move them into /States/Cores under RetroArch names, set the state format to RetroArch (compressed) and enable boot mounts?" || return
+			enable_core_states
+			;;
+		"Re-apply Core States Mappings")
+			confirm "Re-check installed emulators, then move any newly mapped systems' states into /States/Cores? States already there are left where they are." || return
+			enable_core_states
+			;;
+		"Disable Core States")
+			confirm "Disable the states mounts? States stay in /States/Cores and are copied back into the NextUI folders." || return
+			if ask_restore_state_format; then
+				disable_core_states restore
+			else
+				disable_core_states keep
+			fi
 			;;
 	esac
 	rc=$?
@@ -524,6 +578,13 @@ main() {
 		[ "$rc" -eq 0 ] || return "$rc"
 	fi
 
+	if [ -f "$STATES_JOURNAL" ]; then
+		audit_states_operation
+		rc=$?
+		present "$ACTION_RESULT"
+		[ "$rc" -eq 0 ] || return "$rc"
+	fi
+
 	# Moves an install from before mountctl onto it and remounts, so the menu
 	# below reports what is really mounted.
 	if ensure_mount_layer; then
@@ -531,6 +592,13 @@ main() {
 			present "Core save folders could not all be mounted.\n\n$MOUNT_ERROR"
 	else
 		present "Could not update the Core Saves mount layer.\n\n$MOUNT_ERROR"
+	fi
+
+	if ensure_states_layer; then
+		[ -f "$STATES_ENABLED_FILE" ] && ! run_states_mounts &&
+			present "Core States folders could not all be mounted.\n\n$MOUNT_ERROR"
+	else
+		present "Could not update the Core States mount layer.\n\n$MOUNT_ERROR"
 	fi
 
 	command -v minui-list >/dev/null 2>&1 &&

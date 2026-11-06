@@ -34,6 +34,7 @@ dev:
 test:
 	sh bin/tests/test-core-saves.sh
 	sh bin/tests/test-core-saves-mounts.sh
+	sh bin/tests/test-core-states.sh
 
 # bin/mounts is a copy of ../mount-manager, the source shared with Profiles.pak.
 sync-mounts:
