@@ -150,6 +150,11 @@ assert_eq "$(states_mount_status)" "2/2 mounted"
 assert_eq "$(cat "$STATE_TARGET/Advance.state")" "slot0"
 assert_eq "$(cat "$STATE_TARGET/Advance.state.auto")" "auto"
 assert_eq "$(cat "$STATE_TREE/Advance.state")" "slot0"
+# A system whose NextUI folder did not exist before enabling is mounted too, so
+# the first state it ever saves goes straight into the synced tree.
+echo first > "$SHARED_USERDATA_PATH/GB-gambatte/First.state"
+assert_eq "$(cat "$SDCARD_PATH/States/Cores/Gambatte/First.state")" "first"
+rm "$SHARED_USERDATA_PATH/GB-gambatte/First.state"
 # A state written through the mount lands in the synced tree.
 echo new > "$STATE_TARGET/Advance.state2"
 assert_eq "$(cat "$STATE_TREE/Advance.state2")" "new"

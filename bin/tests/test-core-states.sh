@@ -667,6 +667,31 @@ test_an_old_setup_is_offered_a_reapply_for_states() (
 		"$TEST_ROOT/menu.json" >/dev/null || fail "an install without states was not offered a re-apply"
 )
 
+test_states_folders_that_do_not_exist_yet_are_created_and_mounted() (
+	load_fixture missing
+	# NextUI only makes <TAG>-<core> when a game of that system starts or a state
+	# is first saved, so on a fresh card none of them exist.
+	[ ! -e "$SHARED_USERDATA_PATH/GB-gambatte" ] || fail "fixture should start without the folder"
+	put "$SHARED_USERDATA_PATH/GBA-gpsp/Game.gba.st0" slot0
+
+	enable_core_saves || fail "enable: $ACTION_RESULT"
+	# Every mapped system gets its folder and its tree, the played one and not.
+	assert_empty_dir "$SHARED_USERDATA_PATH/GB-gambatte"
+	assert_empty_dir "$SHARED_USERDATA_PATH/GBC-gambatte"
+	[ -d "$STATES_CORES/Gambatte" ] || fail "no tree folder for a system that has no states yet"
+	[ -d "$STATES_CORES/gpSP" ] || fail "no tree folder for gpSP"
+	assert_contains "$STATES_TABLE" "GB|gambatte|Gambatte"
+	assert_content "$STATES_CORES/gpSP/Game.state" slot0
+	# The plan has a mount for the folder that did not exist.
+	sh "$MOUNT_LAYER_FILE" plan | grep -Fq "$SHARED_USERDATA_PATH/GB-gambatte" ||
+		fail "no mount planned for a folder that did not exist"
+
+	# Reverting leaves the empty folders alone and puts states back where they were.
+	revert keep || fail "revert: $ACTION_RESULT"
+	assert_content "$SHARED_USERDATA_PATH/GBA-gpsp/Game.state" slot0
+	assert_empty_dir "$SHARED_USERDATA_PATH/GB-gambatte"
+)
+
 test_nothing_is_touched_when_nothing_maps() (
 	load_fixture nothing
 	rm -rf "$SYSTEM_PATH/paks/Emus"
@@ -700,5 +725,6 @@ test_states_follow_the_single_profile_owner
 test_one_layer_plans_saves_and_states
 test_menu_rows_follow_the_setting_and_the_state
 test_an_old_setup_is_offered_a_reapply_for_states
+test_states_folders_that_do_not_exist_yet_are_created_and_mounted
 test_nothing_is_touched_when_nothing_maps
 echo "RetroArch Core States tests passed"
