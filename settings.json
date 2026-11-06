@@ -56,6 +56,14 @@
 			}
 		},
 		{
+			"name": "> Core States:",
+			"options": ["$core_states"],
+			"selected": 0,
+			"features": {
+				"unselectable": true
+			}
+		},
+		{
 			"name": "> State Format:",
 			"options": ["$state_format"],
 			"selected": 0,
@@ -94,20 +102,6 @@
     },
 		{
 			"name": "Revert to NextUI Saves",
-			"features": {
-				"alignment": "right",
-				"unselectable": false
-		  }
-    },
-		{
-			"name": "Enable Core States",
-			"features": {
-				"alignment": "right",
-				"unselectable": false
-		  }
-    },
-		{
-			"name": "Disable Core States",
 			"features": {
 				"alignment": "right",
 				"unselectable": false

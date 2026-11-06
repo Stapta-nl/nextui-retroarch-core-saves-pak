@@ -46,6 +46,7 @@ begin_operation() {
 	snapshot_operation_file "$MOUNT_TABLE" mounts.conf &&
 		snapshot_operation_file "$MANIFEST" migration.manifest &&
 		snapshot_operation_file "$ENABLED_FILE" enabled &&
+		snapshot_operation_file "$STATES_TABLE" states-mounts.conf &&
 		snapshot_operation_file "$MOUNT_LAYER_FILE" mount-layer || {
 		rm -rf "$OPERATION_STATE"
 		return 1
@@ -182,7 +183,8 @@ audit_operation() {
 			if [ "$operation" = conversion ]; then
 				restore_conversion_backup "$backup"
 			else
-				restore_save_backup "$backup"
+				restore_save_backup "$backup" &&
+					restore_states_from_backup "$backup"
 			fi || {
 				ACTION_RESULT="Could not restore the pre-operation save backup. Reopen the pak to retry."
 				return 1
@@ -191,6 +193,7 @@ audit_operation() {
 		restore_operation_file "$MOUNT_TABLE" mounts.conf &&
 			restore_operation_file "$MANIFEST" migration.manifest &&
 			restore_operation_file "$ENABLED_FILE" enabled &&
+			restore_operation_file "$STATES_TABLE" states-mounts.conf &&
 			restore_mount_layer || {
 			ACTION_RESULT="Could not restore the pre-operation configuration. Reopen the pak to retry."
 			return 1

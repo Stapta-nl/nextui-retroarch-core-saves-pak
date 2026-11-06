@@ -36,10 +36,12 @@ test:
 	sh bin/tests/test-core-saves-mounts.sh
 	sh bin/tests/test-core-states.sh
 
-# bin/mounts is a copy of ../mount-manager, the source shared with Profiles.pak.
+# bin/mounts/mountctl.sh is a copy of ../mount-manager, shared with Profiles.pak.
+# 20-core-saves.sh is this pak's own layer (it also mounts Core States) and is
+# maintained here, so it is not synced.
 sync-mounts:
 	mkdir -p bin/mounts
-	cp $(MOUNT_MANAGER)/mountctl.sh $(MOUNT_MANAGER)/layers/20-core-saves.sh bin/mounts/
+	cp $(MOUNT_MANAGER)/mountctl.sh bin/mounts/
 	chmod 0755 bin/mounts/*.sh
 
 clean:

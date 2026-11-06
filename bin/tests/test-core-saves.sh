@@ -111,6 +111,8 @@ load_fixture() {
 	. "$CORE_SAVES_DIR/launch.sh"
 	show_progress() { :; }
 	run_mounts() { :; }
+	# These tests are about saves; the Core States tests turn the setting on.
+	printf 'core_states=off\n' > "$FEATURES_FILE"
 }
 
 test_minui_to_core_and_generic_restore() (
@@ -154,8 +156,8 @@ test_minui_to_core_and_generic_restore() (
 			.settings[4].features.unselectable == true and
 			(.settings[4].features | has("show_confirm") | not) and
 			(.settings | length) == 12 and
-			.settings[10].name == "Revert to NextUI Saves" and
-			.settings[10].features.unselectable == false and
+			.settings[11].name == "Revert to NextUI Saves" and
+			.settings[11].features.unselectable == false and
 			.conversions[1].name == ".srm" and
 			(has("selected") | not)
 		' "$TEST_ROOT/menu-test.json" >/dev/null ||
@@ -413,8 +415,8 @@ test_inactive_menu_state() (
 		.settings[4].features.unselectable == true and
 		(.settings[4].features | has("show_confirm") | not) and
 		(.settings | length) == 12 and
-		.settings[10].name == "Convert to RetroArch Core Saves" and
-		.settings[10].features.unselectable == false and
+		.settings[11].name == "Convert to RetroArch Core Saves" and
+		.settings[11].features.unselectable == false and
 		.conversions[1].name == ".<pak>.sav" and
 		(has("selected") | not)
 	' "$TEST_ROOT/inactive-menu.json" >/dev/null ||
@@ -449,9 +451,9 @@ test_active_mount_rows_include_unmapped_folders() (
 		.settings[4].features.show_confirm == true and
 		.settings[4].features.confirm_text == "View" and
 		(.settings | length) == 13 and
-		.settings[9].name == " " and
-		.settings[10].name == "Re-apply Core Save Mappings" and
-		.settings[11].name == "Revert to NextUI Saves" and
+		.settings[10].name == " " and
+		.settings[11].name == "Re-apply Core Save Mappings" and
+		.settings[12].name == "Revert to NextUI Saves" and
 		(.mounts | length) == 7 and
 		([.mounts[] | select(.name == " /FC" and .options[0] == " /FCEUmm")] | length) == 1 and
 		([.mounts[] | select(.name == " /GB" and .options[0] == " /Gambatte")] | length) == 1 and
@@ -1003,10 +1005,10 @@ test_reapply_row_completes_partial_mappings() (
 		.settings[3].name == "> Mappings:" and
 		.settings[3].options == ["3/4"] and
 		(.settings | length) == 13 and
-		.settings[10].name == "Re-apply Core Save Mappings" and
-		.settings[10].features.unselectable == false and
-		.settings[11].name == "Revert to NextUI Saves" and
-		.settings[11].features.unselectable == false
+		.settings[11].name == "Re-apply Core Save Mappings" and
+		.settings[11].features.unselectable == false and
+		.settings[12].name == "Revert to NextUI Saves" and
+		.settings[12].features.unselectable == false
 	' "$TEST_ROOT/partial-before.json" >/dev/null ||
 		fail "incomplete mappings did not surface the re-apply action"
 
@@ -1017,7 +1019,7 @@ test_reapply_row_completes_partial_mappings() (
 	jq -e '
 		.settings[3].options == ["4/4"] and
 		(.settings | length) == 13 and
-		.settings[10].name == "Re-apply Core Save Mappings"
+		.settings[11].name == "Re-apply Core Save Mappings"
 	' "$TEST_ROOT/partial-pending.json" >/dev/null ||
 		fail "re-apply action vanished before the mapping was applied"
 
@@ -1037,7 +1039,7 @@ test_reapply_row_completes_partial_mappings() (
 	jq -e '
 		.settings[3].options == ["4/4"] and
 		(.settings | length) == 12 and
-		.settings[10].name == "Revert to NextUI Saves"
+		.settings[11].name == "Revert to NextUI Saves"
 	' "$TEST_ROOT/partial-after.json" >/dev/null ||
 		fail "re-apply action persisted after mappings were complete"
 )
@@ -1095,7 +1097,7 @@ test_profile_rows_show_the_canonical_path() (
 		.settings[1].options == ["Ben"] and
 		.settings[3].name == "> Location:" and
 		.settings[3].options == [".profiles/Ben/Saves"] and
-		.settings[11].name == "Convert to RetroArch Core Saves"
+		.settings[12].name == "Convert to RetroArch Core Saves"
 	' "$TEST_ROOT/profile-menu.json" >/dev/null ||
 		fail "profile menu state is incorrect"
 

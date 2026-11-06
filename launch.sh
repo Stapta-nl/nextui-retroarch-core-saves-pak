@@ -222,12 +222,12 @@ save_format_option() {
 	esac
 }
 
-# Asked while disabling Core States. Cancelling here keeps the current format;
-# declining the earlier confirmation is what aborts the whole operation.
+# Asked when reverting a setup that includes states. Cancelling here keeps the
+# current format; declining the earlier confirmation is what aborts the revert.
 ask_restore_state_format() {
 	local old
 
-	old=$(states_marker_value old_format)
+	old=$(enabled_value old_state_format)
 	[ -n "$old" ] || return 1
 	command -v minui-presenter >/dev/null 2>&1 || return 1
 	minui-presenter \
@@ -274,7 +274,7 @@ has_active_mounts() {
 # re-running the migration would actually change something: either an installed
 # emulator is still unmapped, or the live mount table no longer matches what
 # discovery now produces (a pak was installed or removed, or mapping.conf
-# changed). Runs discovery quietly so rendering the menu never writes a report.
+# changed), or Core States is wanted and the states do not match. Runs discovery quietly so rendering the menu never writes a report.
 compute_mapping_status() {
 	local table="/tmp/${PAK_NAME}-mapping-check.conf"
 
@@ -289,6 +289,14 @@ compute_mapping_status() {
 		MAPPING_STALE=true
 	elif [ -f "$ENABLED_FILE" ] && ! cmp -s "$table" "$MOUNT_TABLE"; then
 		MAPPING_STALE=true
+	elif [ -f "$ENABLED_FILE" ] && core_states_wanted; then
+		# States count too: a setup from before Core States that should now have
+		# them, or a states table that no longer matches the installed emulators.
+		derive_states_table "$table" "$table.states" quiet || :
+		if ! states_active || ! cmp -s "$table.states" "$STATES_TABLE"; then
+			MAPPING_STALE=true
+		fi
+		rm -f "$table.states"
 	fi
 
 	MAPPING_SUMMARY="$MAPPING_RESOLVED/$MAPPING_MAPPABLE"
@@ -300,7 +308,7 @@ current_settings() {
 	local mount_rows="/tmp/${PAK_NAME}-mount-rows.tsv"
 	local mount_rows_json="/tmp/${PAK_NAME}-mount-rows.json"
 	local format location mounts active mounts_selectable profile
-	local state_format states_status states_active states_location
+	local state_format states_status states_active states_location core_states_text core_states_locked
 
 	rm -f "$minui_list_file" "$mount_rows" "$mount_rows_json"
 
@@ -315,10 +323,18 @@ current_settings() {
 	mounts=$(mount_status)
 	state_format=$(state_format_name "$(get_state_format)")
 	states_status=$(states_mount_status)
-	states_active=false
-	[ -f "$STATES_ENABLED_FILE" ] && states_active=true
 	states_location="/States/Cores"
-	compute_states_status
+	# The setting is locked while a setup is running; it then shows what that
+	# setup includes rather than what the next one would.
+	core_states_locked=false
+	if [ -f "$ENABLED_FILE" ]; then
+		core_states_locked=true
+		if states_active; then core_states_text="On (active)"; else core_states_text="Off"; fi
+	elif [ "$(core_states_setting)" = on ]; then
+		core_states_text="On"
+	else
+		core_states_text="Off"
+	fi
 
 	has_active_mounts && mounts_selectable=true
 	compute_mapping_status
@@ -344,8 +360,8 @@ current_settings() {
 		--arg state_format "$state_format" \
 		--arg states_status "$states_status" \
 		--arg states_location "$states_location" \
-		--argjson states_active "$states_active" \
-		--argjson states_stale "$STATES_STALE" \
+		--arg core_states_text "$core_states_text" \
+		--argjson core_states_locked "$core_states_locked" \
 		--argjson stale "$MAPPING_STALE" \
 		--slurpfile mount_rows "$mount_rows_json" \
 		'.settings |= map(
@@ -363,14 +379,12 @@ current_settings() {
 			elif .name == "> State Format:" then .options = [$state_format]
 			elif .name == "> States:" then .options = [$states_status]
 			elif .name == "> States Location:" then .options = [$states_location]
-			elif .name == "Enable Core States" then
-				(if $states_active | not then .features.unselectable = false
-				elif $states_stale then
-					.name = "Re-apply Core States Mappings"
-					| .features.unselectable = false
-				else empty end)
-			elif .name == "Disable Core States" then
-				(if $states_active then .features.unselectable = false else empty end)
+			elif .name == "> Core States:" then
+				.options = [$core_states_text]
+				| .features.unselectable = $core_states_locked
+				| if $core_states_locked
+					then .features |= del(.show_confirm)
+					else .features.show_confirm = true | .features.confirm_text = "Toggle" end
 			elif .name == "Convert to RetroArch Core Saves" then
 				(if $active | not then .features.unselectable = false
 				elif $stale then
@@ -505,7 +519,6 @@ cleanup() {
 	rm -f "/tmp/${PAK_NAME}-mount-rows.json"
 	rm -f "/tmp/${PAK_NAME}-mounts.json"
 	rm -f "/tmp/${PAK_NAME}-mapping-check.conf"
-	rm -f "/tmp/${PAK_NAME}-states-check.conf"
 }
 
 run_action() {
@@ -516,32 +529,24 @@ run_action() {
 
 	case "$action" in
 		"Convert to RetroArch Core Saves")
-			confirm "Back up saves, move mapped systems into /Saves/Cores, and enable boot mounts?" || return
+			if core_states_wanted; then
+				confirm "Back up saves and states, move mapped systems into /Saves/Cores and /States/Cores, set the state format to RetroArch (compressed), and enable boot mounts?" || return
+			else
+				confirm "Back up saves, move mapped systems into /Saves/Cores, and enable boot mounts?" || return
+			fi
 			enable_core_saves
 			;;
 		"Re-apply Core Save Mappings")
-			confirm "Re-check installed emulators and mapping.conf, then move any newly mapped systems into /Saves/Cores? Saves already in /Saves/Cores are left where they are." || return
+			confirm "Re-check installed emulators and mapping.conf, then move any newly mapped systems$(core_states_wanted && echo ' (and their states)') into /Saves/Cores$(core_states_wanted && echo ' and /States/Cores')? Anything already there is left where it is." || return
 			enable_core_saves
 			;;
 		"Revert to NextUI Saves")
-			confirm "Disable boot mounts and restore only saves that map safely to installed systems? Shared-core saves need exactly one matching ROM; unmatched files stay in /Saves/Cores." || return
-			restore_to_legacy current
-			;;
-		"Enable Core States")
-			confirm "Back up states, move them into /States/Cores under RetroArch names, set the state format to RetroArch (compressed) and enable boot mounts?" || return
-			enable_core_states
-			;;
-		"Re-apply Core States Mappings")
-			confirm "Re-check installed emulators, then move any newly mapped systems' states into /States/Cores? States already there are left where they are." || return
-			enable_core_states
-			;;
-		"Disable Core States")
-			confirm "Disable the states mounts? States stay in /States/Cores and are copied back into the NextUI folders." || return
-			if ask_restore_state_format; then
-				disable_core_states restore
-			else
-				disable_core_states keep
+			confirm "Disable boot mounts and restore only saves$(states_active && echo ' and states') that map safely to installed systems? Shared-core files need exactly one matching ROM; unmatched files stay in /Saves/Cores$(states_active && echo ' and /States/Cores')." || return
+			RESTORE_STATE_FORMAT=keep
+			if states_active && ask_restore_state_format; then
+				RESTORE_STATE_FORMAT=restore
 			fi
+			restore_to_legacy current
 			;;
 	esac
 	rc=$?
@@ -578,13 +583,6 @@ main() {
 		[ "$rc" -eq 0 ] || return "$rc"
 	fi
 
-	if [ -f "$STATES_JOURNAL" ]; then
-		audit_states_operation
-		rc=$?
-		present "$ACTION_RESULT"
-		[ "$rc" -eq 0 ] || return "$rc"
-	fi
-
 	# Moves an install from before mountctl onto it and remounts, so the menu
 	# below reports what is really mounted.
 	if ensure_mount_layer; then
@@ -592,13 +590,6 @@ main() {
 			present "Core save folders could not all be mounted.\n\n$MOUNT_ERROR"
 	else
 		present "Could not update the Core Saves mount layer.\n\n$MOUNT_ERROR"
-	fi
-
-	if ensure_states_layer; then
-		[ -f "$STATES_ENABLED_FILE" ] && ! run_states_mounts &&
-			present "Core States folders could not all be mounted.\n\n$MOUNT_ERROR"
-	else
-		present "Could not update the Core States mount layer.\n\n$MOUNT_ERROR"
 	fi
 
 	command -v minui-list >/dev/null 2>&1 &&
@@ -621,6 +612,8 @@ main() {
 				[ -n "$selection" ] || continue
 				if [ "$selection" = "> Mounts:" ]; then
 					mounts_screen "$settings"
+				elif [ "$selection" = "> Core States:" ]; then
+					if [ "$(core_states_setting)" = on ]; then set_core_states_setting off; else set_core_states_setting on; fi
 				else
 					run_action "$selection"
 				fi

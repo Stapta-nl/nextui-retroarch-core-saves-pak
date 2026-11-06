@@ -1,6 +1,5 @@
 #!/bin/sh
 
-# core-states holds the Core States backups, which are never pruned.
 prune_backups() {
 	local keep="${1:-5}"
 	local protected="${2:-}"
@@ -8,7 +7,7 @@ prune_backups() {
 	local count=0 backup
 
 	find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d \
-		! -name '*.incomplete' ! -name core-states -print 2>/dev/null |
+		! -name '*.incomplete' -print 2>/dev/null |
 		LC_ALL=C sort -r > "$list" || {
 			rm -f "$list"
 			return 1
@@ -16,6 +15,10 @@ prune_backups() {
 	while IFS= read -r backup; do
 		[ -n "$backup" ] || continue
 		[ "$backup" = "$protected" ] && continue
+		# The backups an enabled setup points at hold the saves and states it
+		# started from, so they stay however many newer ones there are.
+		[ "$backup" = "$(enabled_value backup)" ] && continue
+		[ "$backup" = "$(enabled_value states_backup)" ] && continue
 		count=$((count + 1))
 		if [ -n "$protected" ]; then
 			[ "$count" -lt "$keep" ] && continue
@@ -64,9 +67,13 @@ reclaim_incomplete_backups() {
 	rm -f "$list"
 }
 
+# $2 is the states table (tag|emu|core), when states are part of the operation:
+# the NextUI states folders it lists are kept under States/<tag>-<emu>, so a
+# rollback can put them back exactly as they were.
 make_backup() {
 	local label="$1"
-	local ts backup incomplete n
+	local states_table="${2:-}"
+	local ts backup incomplete n tag emu core dir
 	ts=$(date +%Y%m%d-%H%M%S 2>/dev/null || echo now)
 	backup="$BACKUP_ROOT/$ts-$label"
 	n=0
@@ -83,6 +90,18 @@ make_backup() {
 		rm -rf "$incomplete"
 		return 1
 	}
+	if [ -n "$states_table" ] && [ -f "$states_table" ]; then
+		while IFS='|' read -r tag emu core; do
+			[ -n "$tag" ] && [ -n "$emu" ] || continue
+			dir=$(states_target "$tag" "$emu")
+			[ -d "$dir" ] || continue
+			mkdir -p "$incomplete/States/$tag-$emu" &&
+				cp -a "$dir"/. "$incomplete/States/$tag-$emu"/ || {
+				rm -rf "$incomplete"
+				return 1
+			}
+		done < "$states_table"
+	fi
 	if [ -f "$SETTINGS_PATH" ]; then
 		cp -p "$SETTINGS_PATH" "$incomplete/minuisettings.txt" || {
 			rm -rf "$incomplete"

@@ -129,49 +129,46 @@ assert_eq "$(cat "$SAVES_PATH/GB/Mono.gb.sav")" "mono"
 [ -e "$MOUNTS_HOME/mountctl.sh" ] && fail "mountctl left behind"
 
 echo "PASS: Core Saves with real mounts"
-# --- Core States, with real mounts -------------------------------------------
-# Both layers installed together: mountctl checks their scopes against each
-# other, and layer 20 reads from inside the shared data layer 30 mounts into.
+# --- Core States in the same transaction, with real mounts --------------------
+# One layer mounts both: the tag folders in /Saves and the NextUI states folders
+# in shared data, which the same layer also reads its tables from.
 STATE_TARGET="$SHARED_USERDATA_PATH/GBA-gpsp"
-printf 'stateFormat=0\n' >> "$SHARED_USERDATA_PATH/minuisettings.txt"
-mkdir -p "$STATE_TARGET"
+STATE_TREE="$SDCARD_PATH/States/Cores/gpSP"
+printf 'saveFormat=3\nstateFormat=0\n' > "$SHARED_USERDATA_PATH/minuisettings.txt"
+printf 'core_states=on\n' > "$FEATURES_FILE"
+mkdir -p "$STATE_TARGET" "$ROMS_PATH/Game Boy Advance (GBA)"
+: > "$ROMS_PATH/Game Boy Advance (GBA)/Advance.gba"
 echo slot0 > "$STATE_TARGET/Advance.gba.st0"
 echo auto > "$STATE_TARGET/Advance.gba.st9"
-unset -f run_mounts run_states_mounts 2>/dev/null || :
-. "$PAK_DIR/bin/mounts.sh" 2>/dev/null || :
-. "$PAK_DIR/bin/states.sh"
 
-enable_core_saves || fail "saves for the states test: $ACTION_RESULT"
-enable_core_states || fail "enable states: $ACTION_RESULT"
+enable_core_saves || fail "enable saves and states: $ACTION_RESULT"
+assert_eq "$(enabled_value states)" "1"
 assert_eq "$(mount_count "$STATE_TARGET")" "1"
 assert_eq "$(mount_count "$SAVES_PATH/GBA")" "1"
 assert_eq "$(states_mount_status)" "2/2 mounted"
 # What NextUI sees through the mount is the RetroArch-named file in the tree.
 assert_eq "$(cat "$STATE_TARGET/Advance.state")" "slot0"
 assert_eq "$(cat "$STATE_TARGET/Advance.state.auto")" "auto"
-assert_eq "$(cat "$SDCARD_PATH/States/Cores/gpSP/Advance.state")" "slot0"
+assert_eq "$(cat "$STATE_TREE/Advance.state")" "slot0"
 # A state written through the mount lands in the synced tree.
 echo new > "$STATE_TARGET/Advance.state2"
-assert_eq "$(cat "$SDCARD_PATH/States/Cores/gpSP/Advance.state2")" "new"
+assert_eq "$(cat "$STATE_TREE/Advance.state2")" "new"
 assert_eq "$(get_state_format)" "3"
-[ -f "$MOUNTS_HOME/layers.d/20-core-saves.sh" ] && [ -f "$MOUNTS_HOME/layers.d/30-core-states.sh" ] ||
-	fail "both layers should be installed"
+[ -f "$MOUNTS_HOME/layers.d/20-core-saves.sh" ] || fail "the layer should be installed"
+[ -e "$MOUNTS_HOME/layers.d/30-core-states.sh" ] && fail "states got a second layer"
 
-# Boot brings both back, and re-applying is stable.
+# Boot brings everything back, and re-applying is stable.
 sh "$MOUNTS_HOME/mountctl.sh" down || fail "down failed"
 assert_eq "$(mount_count "$STATE_TARGET")" "0"
+assert_eq "$(mount_count "$SAVES_PATH/GBA")" "0"
 sh "$MOUNTS_HOOK" || fail "boot hook failed"
 assert_eq "$(mount_count "$STATE_TARGET")" "1"
 assert_eq "$(mount_count "$SAVES_PATH/GBA")" "1"
 sh "$MOUNTS_HOME/mountctl.sh" apply || fail "re-apply failed"
 assert_eq "$(mount_count "$STATE_TARGET")" "1"
 
-# Taking only the states layer down leaves the save mounts alone.
-sh "$MOUNTS_HOME/mountctl.sh" down 30-core-states || fail "down 30 failed"
-assert_eq "$(mount_count "$STATE_TARGET")" "0"
-assert_eq "$(mount_count "$SAVES_PATH/GBA")" "1"
-
 # A states folder that gained files while unmounted is not hidden.
+sh "$MOUNTS_HOME/mountctl.sh" down || fail "down failed"
 echo stray > "$STATE_TARGET/stray.state"
 sh "$MOUNTS_HOOK" >/dev/null && fail "boot mounted over a states folder with files in it"
 assert_eq "$(mount_count "$STATE_TARGET")" "0"
@@ -179,28 +176,24 @@ assert_eq "$(mount_count "$STATE_TARGET")" "0"
 rm "$STATE_TARGET/stray.state"
 sh "$MOUNTS_HOOK" || fail "remount failed"
 
-# Enabling again with everything mounted is a no-op for the states.
-enable_core_states || fail "enable again: $ACTION_RESULT"
+# Enabling again with everything mounted changes nothing.
+enable_core_saves || fail "enable again: $ACTION_RESULT"
 assert_eq "$(mount_count "$STATE_TARGET")" "1"
-assert_eq "$(states_marker_value old_format)" "0"
-assert_eq "$(find "$SDCARD_PATH/States/Cores/gpSP" -type f | wc -l | tr -d ' ')" "3"
+assert_eq "$(enabled_value old_state_format)" "0"
+assert_eq "$(find "$STATE_TREE" -type f | wc -l | tr -d ' ')" "3"
 
-# Restoring the MinUI format needs the ROM, which supplies the extension back.
-mkdir -p "$ROMS_PATH/Game Boy Advance (GBA)"
-: > "$ROMS_PATH/Game Boy Advance (GBA)/Advance.gba"
-
-# Disabling unmounts, copies the states back and removes only its own layer.
-disable_core_states restore || fail "disable states: $ACTION_RESULT"
+# Reverting unmounts both kinds, puts the format back and renames the states,
+# and removes the layer, and with it mountctl, since no other pak has one.
+RESTORE_STATE_FORMAT=restore
+restore_to_legacy current || fail "revert: $ACTION_RESULT"
 assert_eq "$(mount_count "$STATE_TARGET")" "0"
-assert_eq "$(mount_count "$SAVES_PATH/GBA")" "1"
+assert_eq "$(mount_count "$SAVES_PATH/GBA")" "0"
 assert_eq "$(cat "$STATE_TARGET/Advance.gba.st0")" "slot0"
 assert_eq "$(cat "$STATE_TARGET/Advance.gba.st9")" "auto"
-[ -e "$MOUNTS_HOME/layers.d/30-core-states.sh" ] && fail "states layer left installed"
-[ -f "$MOUNTS_HOME/layers.d/20-core-saves.sh" ] || fail "disabling states removed the saves layer"
+assert_eq "$(cat "$STATE_TARGET/Advance.gba.st2")" "new"
 assert_eq "$(get_state_format)" "0"
-
-# Reverting the saves now removes the last layer and mountctl with it.
-restore_to_legacy current || fail "final revert: $ACTION_RESULT"
+[ -e "$MOUNT_LAYER_FILE" ] && fail "layer left installed after revert"
 [ -e "$MOUNTS_HOME/mountctl.sh" ] && fail "mountctl left behind"
+assert_eq "$(cat "$STATE_TREE/Advance.state")" "slot0"
 
 echo "PASS: Core States with real mounts"

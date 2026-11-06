@@ -85,14 +85,15 @@ Available actions depend on current state.
 
 ## Core States
 
-Optional and independent of Core Saves: either, both or neither can be on. Off by
-default. It does for save states what Core Saves does for saves, so a desktop
-RetroArch can sync each core's states folder with Syncthing without per-system
-mapping.
+Save states are handled in the same conversion as saves, so a desktop RetroArch
+can sync each core's states folder with Syncthing without per-system mapping.
+There is one **Convert** action and one **Revert** action, one backup, one
+recoverable transaction, and one mount layer; the states ride along when the
+**Core States** setting is on (it is on by default).
 
 NextUI keeps states in `.userdata/shared/<TAG>-<core>`, where `<core>` is the
-emulator's core file name (`GB-gambatte`, `GBC-gambatte`, `SFC-snes9x`). Enabling
-Core States moves them into one folder per core and bind-mounts that folder back
+emulator's core file name (`GB-gambatte`, `GBC-gambatte`, `SFC-snes9x`).
+Converting moves them into one folder per core and bind-mounts that folder back
 over each NextUI folder:
 
 ```text
@@ -109,25 +110,33 @@ The folders are named after the libretro library name, exactly like `/Saves/Core
 its states are sorted into folders by core.
 
 **Point Syncthing at `/mnt/SDCARD/States/Cores`** (and RetroArch's states folder at
-the other end). Like the NextUI folders it replaces, the tag folders under
+the other end), next to `/Saves/Cores` for saves. The NextUI folders under
 `.userdata/shared` are runtime aliases and should not be synced themselves.
 
-### Why a separate tree
+### The setting
 
-States are deliberately not stored inside `/Saves/Cores/<core>`. Reverting Core
-Saves copies every file of a core folder into `/Saves/<tag>`, and Core Saves
-backups and rollbacks rewrite `/Saves` wholesale, which would pull the mount
-source out from under the states mounts. A sibling tree keeps the two features
-from touching each other's files.
+The **Core States** row is under *State Status*. Select it to switch between On
+and Off; it only changes what the next conversion includes. While Core Saves is
+enabled the row is locked and shows what the running setup includes
+(`On (active)` or `Off`), so a setup is only ever changed by reverting and
+converting again. A setup made before Core States existed has no states in it;
+with the setting on, **Re-apply Core Save Mappings** appears and brings them in.
 
-### Enabling
+### Converting
 
-1. Records the current state format in `states-enabled` so it can be restored.
-2. Backs up the existing NextUI states folders and `minuisettings.txt`.
-3. Renames and copies every state into `/States/Cores/<core>`.
-4. Sets the NextUI state format to **RetroArch (compressed)**.
-5. Registers the mounts as mountctl layer 30 (`30-core-states.sh`) and mounts them.
-6. Writes what was converted, skipped or failed to the conversion report.
+One operation, one journal, one backup, for saves and states together:
+
+1. Backs up `/Saves`, the NextUI states folders and `minuisettings.txt`.
+2. Renames and copies every state into `/States/Cores/<core>`, next to the saves
+   being moved into `/Saves/Cores`.
+3. Sets the NextUI state format to **RetroArch (compressed)**, and records the one
+   it replaced so it can be restored.
+4. Registers the mounts with mountctl's layer 20 (the same layer that mounts the
+   saves) and mounts them.
+5. Writes what was converted, skipped or failed to the conversion report.
+
+If anything fails or the device stops part-way, the whole operation, saves and
+states, is rolled back together the next time the pak opens.
 
 NextUI picks up a changed format the next time a game starts, so no restart is
 needed. Only file names change; the state data itself is never rewritten. MinArch
@@ -144,7 +153,7 @@ because the NextUI folder is hidden under the mount afterwards.
 | Auto-resume | `Game.gba.st9` | `Game.state.auto` | `Game.state.auto` |
 
 Existing files are sorted by their own names rather than by the setting, because
-NextUI never converts old files when the setting changes. Enabling is safe to
+NextUI never converts old files when the setting changes. Converting is safe to
 repeat: it keeps the format recorded the first time, reuses identical files and
 only picks up states that appeared since. If two different files would get the
 same name, both are kept and the second becomes `Game.core-conflict-N.state`.
@@ -152,12 +161,12 @@ same name, both are kept and the second becomes `Game.core-conflict-N.state`.
 Keep NextUI's state format on RetroArch while Core States is on. Another format
 makes NextUI write names desktop RetroArch will not read.
 
-### Disabling
+### Reverting
 
-Disabling takes the states mounts down, then asks whether to restore the
-original state format. States are copied back into the NextUI folders and nothing
-is ever deleted from `/States/Cores`, because Syncthing would propagate the
-deletion.
+**Revert to NextUI Saves** reverses both. When the setup includes states it also
+asks whether to restore the state format from before. States are copied back into
+the NextUI folders and nothing is ever deleted from `/States/Cores`, because
+Syncthing would propagate the deletion.
 
 - **Restore**: puts the recorded format back and renames the states for it.
   The MinUI format needs the ROM to recover the extension, so a state without
@@ -169,10 +178,11 @@ deletion.
 
 ### Backups
 
-States are backed up before enabling and before disabling, to
-`.core-saves-backups/core-states/` (per profile under Profiles.pak). Unlike the
-save backups, **these are never pruned**; delete them yourself when you no
-longer need them.
+The conversion backup holds the saves and the NextUI states folders as they were.
+The usual limit of five backups applies, with one exception: the backups the
+running setup points at (the one made when it was enabled, and the one holding the
+states from before Core States) are never pruned while it runs, so the originals
+are still there when you revert.
 
 ### Important: states are not portable between cores
 
@@ -183,7 +193,8 @@ moves the file; it cannot make it compatible.
 
 Other things to know:
 
-- The auto-resume state (`.state.auto`) is synced too. A RetroArch with
+- The auto-resume state (`.state.auto`) is synced too. NextUI writes it when the
+  device powers off, and it can reach another device before then. A RetroArch with
   auto-load-state enabled will load it, and the one from the device you powered
   off last wins.
 - RetroArch writes `.png` thumbnails beside its states. They are harmless and are
@@ -195,18 +206,11 @@ Other things to know:
 
 ### Profiles
 
-Core States follows the same single-owner rule as Core Saves, using the same
-ownership record in `.profiles/core-saves-profile`: only the owner's states are
-mounted, other profiles are refused, and backups go to the active profile's
-backup folder. Everything is coordinated through mountctl. `/States/Cores` is
-outside `/Saves`, so the Syncthing path is the same with or without Profiles.
-
-### Menu
-
-Core States adds a **State Status** block (format, mount count and location) and
-an **Enable Core States** or **Disable Core States** action. When an emulator is
-installed or removed while enabled, the action becomes **Re-apply Core States
-Mappings**.
+Core States follows Core Saves' single-owner rule, using the same ownership record
+in `.profiles/core-saves-profile`: only the owner's saves and states are mounted,
+other profiles cannot convert, and backups go to the active profile's backup
+folder. Everything is coordinated through mountctl. `/States/Cores` is outside
+`/Saves`, so the Syncthing path is the same with or without Profiles.
 
 ### Folder names and mapping
 
@@ -299,7 +303,6 @@ folder that has files in it, so nothing is ever hidden. Installed on the card:
 ```text
 .userdata/<platform>/Mounts/mountctl.sh                the newest copy any pak shipped
 .userdata/<platform>/Mounts/layers.d/20-core-saves.sh
-.userdata/<platform>/Mounts/layers.d/30-core-states.sh   when Core States is on
 .userdata/<platform>/.hooks/boot.d/00-mounts.sync.sh   applies every layer at boot
 .userdata/<platform>/logs/mounts.txt                   every mount change
 ```
