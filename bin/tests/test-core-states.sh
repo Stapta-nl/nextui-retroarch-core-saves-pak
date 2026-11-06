@@ -692,6 +692,245 @@ test_states_folders_that_do_not_exist_yet_are_created_and_mounted() (
 	assert_empty_dir "$SHARED_USERDATA_PATH/GB-gambatte"
 )
 
+test_slots_nextui_cannot_represent_are_refused() (
+	load_fixture slots
+
+	# NextUI reads manual slots 0-7, its hidden default in 8, and the auto-resume
+	# state. A desktop slot of 9 or more has no name in formats 0 to 2: .st9 and
+	# .state.auto are the auto-resume state, and .st12 is never read.
+	assert_eq "$(state_from_retroarch 'Game.state8' 0 'Game.gba')" "Game.gba.st8"
+	assert_eq "$(state_from_retroarch 'Game.state8' 1)" "Game.state.8"
+	assert_eq "$(state_from_retroarch 'Game.state8' 2)" "Game.state.8"
+	assert_eq "$(state_from_retroarch 'Game.state8' 3)" "Game.state8"
+	assert_eq "$(state_from_retroarch 'Game.state8' 4)" "Game.state8"
+	for fmt in 0 1 2; do
+		state_from_retroarch 'Game.state9' "$fmt" 'Game.gba' >/dev/null && fail "slot 9 got a name in format $fmt"
+		state_from_retroarch 'Game.state12' "$fmt" 'Game.gba' >/dev/null && fail "slot 12 got a name in format $fmt"
+	done
+	for fmt in 3 4; do
+		assert_eq "$(state_from_retroarch 'Game.state9' "$fmt")" "Game.state9"
+		assert_eq "$(state_from_retroarch 'Game.state12' "$fmt")" "Game.state12"
+	done
+	# The auto-resume state still maps in every format.
+	assert_eq "$(state_from_retroarch 'Game.state.auto' 0 'Game.gba')" "Game.gba.st9"
+	assert_eq "$(state_from_retroarch 'Game.state.auto' 1)" "Game.state.auto"
+	assert_eq "$(state_from_retroarch 'Game.state.auto' 2)" "Game.state.auto"
+	assert_eq "$(state_from_retroarch 'Game.state.auto' 3)" "Game.state.auto"
+
+	# On revert they stay in the tree and are reported, never renamed onto the
+	# auto-resume state.
+	printf 'saveFormat=3\nstateFormat=1\n' > "$SETTINGS_PATH"
+	put "$SHARED_USERDATA_PATH/GBA-gpsp/Game.state.5" five
+	put "$SHARED_USERDATA_PATH/GBA-gpsp/Game.state.auto" auto
+	enable_core_saves || fail "enable: $ACTION_RESULT"
+	put "$STATES_CORES/gpSP/Game.state8" eight
+	put "$STATES_CORES/gpSP/Game.state9" nine
+	put "$STATES_CORES/gpSP/Game.state12" twelve
+	revert restore || fail "revert: $ACTION_RESULT"
+	assert_eq "$(get_state_format)" "1"
+	assert_content "$SHARED_USERDATA_PATH/GBA-gpsp/Game.state.5" five
+	assert_content "$SHARED_USERDATA_PATH/GBA-gpsp/Game.state.8" eight
+	assert_content "$SHARED_USERDATA_PATH/GBA-gpsp/Game.state.auto" auto
+	assert_absent "$SHARED_USERDATA_PATH/GBA-gpsp/Game.state.9"
+	assert_absent "$SHARED_USERDATA_PATH/GBA-gpsp/Game.state.12"
+	assert_content "$STATES_CORES/gpSP/Game.state9" nine
+	assert_content "$STATES_CORES/gpSP/Game.state12" twelve
+	assert_contains "$REPORT_FILE" "Game.state9 cannot be named"
+	assert_contains "$REPORT_FILE" "Game.state12 cannot be named"
+	case "$ACTION_RESULT" in *"will not load"*) ;; *) fail "the result did not say what will not load: $ACTION_RESULT" ;; esac
+)
+
+test_the_rom_index_is_only_built_when_a_state_needs_it() (
+	load_fixture lazy
+	mkdir -p "$ROMS_PATH/Game Boy Advance (GBA)"
+	: > "$ROMS_PATH/Game Boy Advance (GBA)/Game.gba"
+	built=0
+	build_states_rom_index() { built=$((built + 1)); : > "$2"; }
+	printf 'GBA|gpsp|gpSP\n' > "$STATES_TABLE"
+	put "$STATES_CORES/gpSP/Game.state" one
+
+	# One system for the core, a format that needs no ROM name: never built.
+	for fmt in 1 2 3 4; do
+		build_states_restore_plan "$fmt" "$TEST_ROOT/plan" "$TEST_ROOT/index" || fail "plan for format $fmt"
+		assert_eq "$STATES_INDEX_BUILT" "0"
+		assert_eq "$STATES_RESTORE_MATCHED" "1"
+	done
+	assert_eq "$built" "0"
+
+	# The MinUI format names the file after the ROM, so it needs the index.
+	build_states_restore_plan 0 "$TEST_ROOT/plan" "$TEST_ROOT/index" || fail "plan for format 0"
+	assert_eq "$STATES_INDEX_BUILT" "1"
+	assert_eq "$built" "1"
+
+	# A core shared by two systems needs a ROM to tell them apart, for any format.
+	printf 'GB|gambatte|Gambatte\nGBC|gambatte|Gambatte\n' > "$STATES_TABLE"
+	put "$STATES_CORES/Gambatte/Game.state" two
+	build_states_restore_plan 3 "$TEST_ROOT/plan" "$TEST_ROOT/index" || fail "plan for a shared core"
+	assert_eq "$STATES_INDEX_BUILT" "1"
+	assert_eq "$built" "2"
+)
+
+test_the_rom_index_rows() (
+	load_fixture rom-index
+	r="$ROMS_PATH"
+	mkdir -p "$r/Game Boy (GB)/sub" "$r/Game Boy Color (GBC)" "$r/(GB)" "$r/Other (SFC)"
+	for f in "Game Boy (GB)/Mono.gb" "Game Boy (GB)/sub/Deep.gb" "Game Boy (GB)/Dr. Mario.gb" \
+		"Game Boy Color (GBC)/Zip Game.gbc.zip" "Game Boy Color (GBC)/Up.ZIP" "(GB)/Root.gb" \
+		"Game Boy (GB)/x.z" "Game Boy (GB)/noext" "Other (SFC)/Skip.sfc"; do
+		: > "$r/$f"
+	done
+	printf 'GB|gambatte|Gambatte\nGBC|gambatte|Gambatte\n' > "$TEST_ROOT/table"
+	build_states_rom_index "$TEST_ROOT/table" "$TEST_ROOT/index" || fail "index failed"
+	cat > "$TEST_ROOT/expected" <<'EOF'
+GBC|Up|Up.ZIP|direct
+GBC|Zip Game.gbc|Zip Game.gbc.zip|direct
+GBC|Zip Game|Zip Game.gbc.zip|archive
+GB|Deep|Deep.gb|direct
+GB|Dr. Mario|Dr. Mario.gb|direct
+GB|Mono|Mono.gb|direct
+GB|Root|Root.gb|direct
+GB|noext|noext|direct
+GB|x.z|x.z|direct
+EOF
+	LC_ALL=C sort "$TEST_ROOT/expected" > "$TEST_ROOT/expected.sorted"
+	cmp "$TEST_ROOT/expected.sorted" "$TEST_ROOT/index" || fail "unexpected index: $(cat "$TEST_ROOT/index")"
+)
+
+test_tag_matching_for_shared_cores() (
+	load_fixture tags
+	printf 'GB|gambatte|Gambatte\nGBC|gambatte|Gambatte\nGBA|gpsp|gpSP\n' > "$TEST_ROOT/table"
+	cat > "$TEST_ROOT/index" <<'EOF'
+GB|Both|Both.gb|direct
+GBC|Both|Both.gbc|direct
+GBC|Only|Only.gbc|direct
+GB|Mono|Mono.gb|direct
+EOF
+	# One tag for the core: no ROM needed, even with an empty index.
+	: > "$TEST_ROOT/empty"
+	assert_eq "$(states_tag_for gpSP Anything "$TEST_ROOT/table" "$TEST_ROOT/empty")" "GBA"
+	# GB is a prefix of GBC; only exact tags count.
+	assert_eq "$(states_tag_for Gambatte Only "$TEST_ROOT/table" "$TEST_ROOT/index")" "GBC"
+	assert_eq "$(states_tag_for Gambatte Mono "$TEST_ROOT/table" "$TEST_ROOT/index")" "GB"
+	rc=0
+	states_tag_for Gambatte Both "$TEST_ROOT/table" "$TEST_ROOT/index" >/dev/null || rc=$?
+	assert_eq "$rc" "2"
+	rc=0
+	states_tag_for Gambatte Nowhere "$TEST_ROOT/table" "$TEST_ROOT/index" >/dev/null || rc=$?
+	assert_eq "$rc" "1"
+	# A tag in the index that does not belong to this core is ignored.
+	printf 'GBA|Only|Only.gba|direct\n' >> "$TEST_ROOT/index"
+	assert_eq "$(states_tag_for Gambatte Only "$TEST_ROOT/table" "$TEST_ROOT/index")" "GBC"
+)
+
+test_the_core_states_row_can_be_switched_for_a_setup_without_states() (
+	load_fixture row
+	put "$SHARED_USERDATA_PATH/GB-gambatte/Game.gb.st0" state
+	row='[.settings[] | select(.name == "> Core States:")][0]'
+	set_core_states_setting off
+	enable_core_saves || fail "enable: $ACTION_RESULT"
+	assert_eq "$(enabled_value states)" "0"
+
+	# Converted without states: the row is selectable and shows the setting.
+	current_settings > "$TEST_ROOT/menu-off.json"
+	jq -e "
+		($row.options == [\"Off\"]) and
+		($row.features.unselectable == false) and
+		($row.features.show_confirm == true) and
+		([.settings[].name] | index(\"Re-apply Core Save Mappings\")) == null
+	" "$TEST_ROOT/menu-off.json" >/dev/null || fail "off row is wrong: $(cat "$TEST_ROOT/menu-off.json")"
+
+	# Switching it on offers the Re-apply that brings the states in.
+	set_core_states_setting on
+	current_settings > "$TEST_ROOT/menu-on.json"
+	jq -e "
+		($row.options == [\"On\"]) and
+		($row.features.unselectable == false) and
+		([.settings[].name] | index(\"Re-apply Core Save Mappings\")) != null
+	" "$TEST_ROOT/menu-on.json" >/dev/null || fail "on row is wrong: $(cat "$TEST_ROOT/menu-on.json")"
+	enable_core_saves || fail "re-apply: $ACTION_RESULT"
+	assert_eq "$(enabled_value states)" "1"
+	assert_content "$STATES_CORES/Gambatte/Game.state" state
+
+	# Now the setup carries states: locked, and the setting cannot take them out.
+	current_settings > "$TEST_ROOT/menu-active.json"
+	jq -e "
+		($row.options == [\"On (active)\"]) and
+		($row.features.unselectable == true) and
+		($row.features | has(\"show_confirm\") | not)
+	" "$TEST_ROOT/menu-active.json" >/dev/null || fail "active row is wrong: $(cat "$TEST_ROOT/menu-active.json")"
+	set_core_states_setting off
+	core_states_wanted || fail "an active setup stopped wanting its states"
+)
+
+test_a_reapply_never_drops_the_states_of_a_setup_that_has_them() (
+	load_fixture noreapply
+	put "$SHARED_USERDATA_PATH/GB-gambatte/Game.gb.st0" state
+	enable_core_saves || fail "enable: $ACTION_RESULT"
+	cp "$ENABLED_FILE" "$TEST_ROOT/enabled.before"
+	cp "$STATES_TABLE" "$TEST_ROOT/table.before"
+	cp "$MOUNT_TABLE" "$TEST_ROOT/saves-table.before"
+	cp "$SETTINGS_PATH" "$TEST_ROOT/settings.before"
+
+	# The emulators lose their EMU_EXE but are still mapped by override, so
+	# saves discovery works and only the states table comes out empty.
+	for tag in GB GBC GBA; do printf '#!/bin/sh\n' > "$SYSTEM_PATH/paks/Emus/$tag.pak/launch.sh"; done
+	MAPPING_CONF="$TEST_ROOT/mapping.conf"
+	printf 'GB=Gambatte\nGBC=Gambatte\nGBA=gpSP\n' > "$MAPPING_CONF"
+
+	enable_core_saves && fail "a re-apply with no states folders passed"
+	case "$ACTION_RESULT" in *"No mapped emulator has a states folder"*) ;; *) fail "unexpected result: $ACTION_RESULT" ;; esac
+	assert_contains "$REPORT_FILE" "left exactly as it is"
+	# Nothing changed: same marker, tables and format, states still in the tree,
+	# no half-finished operation.
+	cmp "$TEST_ROOT/enabled.before" "$ENABLED_FILE" || fail "the marker changed"
+	cmp "$TEST_ROOT/table.before" "$STATES_TABLE" || fail "the states table changed"
+	cmp "$TEST_ROOT/saves-table.before" "$MOUNT_TABLE" || fail "the saves table changed"
+	cmp "$TEST_ROOT/settings.before" "$SETTINGS_PATH" || fail "the settings changed"
+	assert_eq "$(enabled_value states)" "1"
+	assert_content "$STATES_CORES/Gambatte/Game.state" state
+	assert_absent "$OPERATION_JOURNAL"
+	assert_absent "$OPERATION_STATE"
+)
+
+test_a_first_conversion_without_state_folders_continues_with_saves() (
+	load_fixture softer
+	put "$SDCARD_PATH/Saves/GB/Game.gb.sav" save
+	printf 'saveFormat=0\nstateFormat=0\n' > "$SETTINGS_PATH"
+	for tag in GB GBC GBA; do printf '#!/bin/sh\n' > "$SYSTEM_PATH/paks/Emus/$tag.pak/launch.sh"; done
+	MAPPING_CONF="$TEST_ROOT/mapping.conf"
+	printf 'GB=Gambatte\nGBC=Gambatte\nGBA=gpSP\n' > "$MAPPING_CONF"
+
+	enable_core_saves || fail "enable: $ACTION_RESULT"
+	assert_eq "$(enabled_value states)" "0"
+	assert_absent "$STATES_TABLE"
+	assert_eq "$(get_state_format)" "0"
+	assert_content "$CORES_PATH/Gambatte/Game.srm" save
+	assert_contains "$REPORT_FILE" "no mapped emulator has a states folder"
+)
+
+test_a_reapply_keeps_a_retroarch_format_the_user_chose() (
+	load_fixture format-kept
+	put "$SHARED_USERDATA_PATH/GB-gambatte/Game.gb.st0" state
+	enable_core_saves || fail "enable: $ACTION_RESULT"
+	assert_eq "$(get_state_format)" "3"
+	assert_eq "$(enabled_value old_state_format)" "0"
+
+	# Uncompressed RetroArch is just as good; the re-apply leaves it alone.
+	set_state_format 4
+	enable_core_saves || fail "re-apply with format 4: $ACTION_RESULT"
+	assert_eq "$(get_state_format)" "4"
+	assert_eq "$(enabled_value old_state_format)" "0"
+
+	# A format that names files differently is put back to RetroArch.
+	set_state_format 1
+	enable_core_saves || fail "re-apply with format 1: $ACTION_RESULT"
+	assert_eq "$(get_state_format)" "3"
+	assert_eq "$(enabled_value old_state_format)" "0"
+	set_state_format 0
+	enable_core_saves || fail "re-apply with format 0: $ACTION_RESULT"
+	assert_eq "$(get_state_format)" "3"
+)
+
 test_nothing_is_touched_when_nothing_maps() (
 	load_fixture nothing
 	rm -rf "$SYSTEM_PATH/paks/Emus"
@@ -726,5 +965,13 @@ test_one_layer_plans_saves_and_states
 test_menu_rows_follow_the_setting_and_the_state
 test_an_old_setup_is_offered_a_reapply_for_states
 test_states_folders_that_do_not_exist_yet_are_created_and_mounted
+test_slots_nextui_cannot_represent_are_refused
+test_the_rom_index_is_only_built_when_a_state_needs_it
+test_the_rom_index_rows
+test_tag_matching_for_shared_cores
+test_the_core_states_row_can_be_switched_for_a_setup_without_states
+test_a_reapply_never_drops_the_states_of_a_setup_that_has_them
+test_a_first_conversion_without_state_folders_continues_with_saves
+test_a_reapply_keeps_a_retroarch_format_the_user_chose
 test_nothing_is_touched_when_nothing_maps
 echo "RetroArch Core States tests passed"

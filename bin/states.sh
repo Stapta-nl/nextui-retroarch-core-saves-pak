@@ -146,11 +146,21 @@ state_from_retroarch() {
 
 	slot=$(state_slot_of "$name") || return 1
 	stem=$(state_stem_of "$name") || return 1
+	# NextUI reads manual slots 0 to 7, its hidden default in 8 and the
+	# auto-resume state, which is slot 9 and only ever named .state.auto. A
+	# desktop RetroArch slot of 9 or more has no NextUI name in formats 0 to 2:
+	# .st9 or .state.auto would collide with the auto-resume state, and .st10 or
+	# .state.10 is never read. Those stay in /States/Cores. Formats 3 and 4 use
+	# RetroArch's names as they are.
+	case "$format:$name" in
+		[012]:*.state.auto) ;;
+		[012]:*) [ "$slot" -le 8 ] || return 1 ;;
+	esac
 	case "$format" in
 		3|4) echo "$name" ;;
 		1|2)
-			case "$slot" in
-				9) echo "$name" ;;
+			case "$name" in
+				*.state.auto) echo "$name" ;;
 				*) echo "$stem.state.$slot" ;;
 			esac
 			;;
@@ -165,8 +175,9 @@ state_from_retroarch() {
 # --- the setting and the state of the feature -----------------------------------
 
 # Whether the next conversion includes states. On by default. The menu row that
-# changes it is locked while Core Saves is enabled, so a running setup is only
-# ever changed by reverting and converting again.
+# changes it is locked only while a setup with states is running, so such a
+# setup is only ever changed by reverting and converting again; a setup without
+# states can switch it on and Re-apply.
 core_states_setting() {
 	local value
 	value=$(sed -n 's/^core_states=//p' "$FEATURES_FILE" 2>/dev/null | tail -n 1)
@@ -289,35 +300,49 @@ restore_states_from_backup() {
 
 # --- restoring -----------------------------------------------------------------
 
-# Builds tag|stem|rom|kind rows for the ROMs of every tag in the states table.
+# Builds tag|stem|rom|kind rows for the ROMs of every tag in the states table,
+# in one pass over the ROM list. A ROM belongs to a tag when "(<tag>)/" appears
+# in its path below Roms, as in "Game Boy (GB)/". Stems follow MinArch's rule
+# (state_stem: drop the last extension when it is 2 to 4 characters), and a zip
+# also yields the stem of its inner name as an "archive" row.
 build_states_rom_index() {
 	local table="$1" output="$2"
-	local roms="$output.roms" raw="$output.raw"
-	local tag emu core rom base stem archive
 
-	: > "$raw" || return 1
-	find "$ROMS_PATH" -type f > "$roms" 2>/dev/null || :
-	while IFS='|' read -r tag emu core; do
-		[ -n "$tag" ] || continue
-		while IFS= read -r rom; do
-			case "$rom" in
-				"$ROMS_PATH"/*"($tag)"/*)
-					base=$(basename "$rom")
-					stem=$(state_stem "$base")
-					printf '%s|%s|%s|direct\n' "$tag" "$stem" "$base" >> "$raw"
-					case "$base" in
-						*.[zZ][iI][pP])
-							archive=$(state_stem "$stem")
-							[ "$archive" = "$stem" ] ||
-								printf '%s|%s|%s|archive\n' "$tag" "$archive" "$base" >> "$raw"
-							;;
-					esac
-					;;
-			esac
-		done < "$roms"
-	done < "$table"
-	sort -u "$raw" > "$output"
-	rm -f "$roms" "$raw"
+	: > "$output" || return 1
+	find "$ROMS_PATH" -type f 2>/dev/null |
+		ROMS="$ROMS_PATH" awk '
+			function stem_of(name,   n, parts, ext) {
+				n = split(name, parts, ".")
+				ext = parts[n]
+				if (n >= 2 && length(ext) >= 2 && length(ext) <= 4)
+					return substr(name, 1, length(name) - length(ext) - 1)
+				return name
+			}
+			NR == FNR { split($0, f, "|"); if (f[1] != "") tags[f[1]] = 1; next }
+			{
+				rest = substr($0, length(ENVIRON["ROMS"]) + 2)
+				base = $0
+				sub(/.*\//, "", base)
+				stem = stem_of(base)
+				for (tag in tags) {
+					if (index(rest, "(" tag ")/") == 0) continue
+					print tag "|" stem "|" base "|direct"
+					if (base ~ /\.[zZ][iI][pP]$/) {
+						archive = stem_of(stem)
+						if (archive != stem) print tag "|" archive "|" base "|archive"
+					}
+				}
+			}' "$table" - | LC_ALL=C sort -u > "$output"
+}
+
+# Whether restoring needs the ROM index: naming for the MinUI format uses the
+# ROM's own name, and a core shared by several systems needs a ROM to tell which
+# system a state belongs to. Otherwise the ROM folders are never walked.
+states_restore_needs_roms() {
+	local target_format="$1"
+
+	[ "$target_format" = 0 ] && return 0
+	awk -F'|' 'NF >= 3 { count[$3]++ } END { for (core in count) if (count[core] > 1) exit 0; exit 1 }' "$STATES_TABLE"
 }
 
 # Prints the tag a state in a core folder belongs to. A core with one tag needs
@@ -325,17 +350,23 @@ build_states_rom_index() {
 # Returns 1 for no match and 2 for several.
 states_tag_for() {
 	local core="$1" stem="$2" table="$3" index="$4"
-	local tags count matches
+	local found count tags matches
 
-	tags=$(awk -F'|' -v core="$core" '$3 == core { print $1 }' "$table" | sort -u)
-	count=$(printf '%s\n' "$tags" | grep -c .)
+	# Tags are joined with "|", which cannot occur in one (the table is "|"
+	# separated), and handed to awk through the environment: a newline-separated
+	# list through -v is not portable to busybox or BWK awk.
+	found=$(awk -F'|' -v core="$core" '
+		$3 == core && !seen[$1]++ { list = list "|" $1; n++ }
+		END { print n + 0 " " list "|" }' "$table")
+	count=${found%% *}
+	tags=${found#* }
 	if [ "$count" = 1 ]; then
-		printf '%s\n' "$tags"
+		tags=${tags#|}
+		printf '%s\n' "${tags%|}"
 		return 0
 	fi
-	matches=$(awk -F'|' -v stem="$stem" -v tags="$tags" '
-		BEGIN { n = split(tags, list, "\n"); for (i = 1; i <= n; i++) allowed[list[i]] = 1 }
-		$2 == stem && ($1 in allowed) { print $1 }' "$index" | sort -u)
+	matches=$(STEM="$stem" TAGS="$tags" awk -F'|' '
+		$2 == ENVIRON["STEM"] && index(ENVIRON["TAGS"], "|" $1 "|") { print $1 }' "$index" | sort -u)
 	[ -n "$matches" ] || return 1
 	[ "$(printf '%s\n' "$matches" | grep -c .)" = 1 ] || return 2
 	printf '%s\n' "$matches"
@@ -353,7 +384,13 @@ build_states_restore_plan() {
 	STATES_RESTORE_MATCHED=0
 	STATES_RESTORE_UNRESOLVED=0
 	: > "$plan" || return 1
-	build_states_rom_index "$STATES_TABLE" "$index" || return 1
+	# The ROM index is only built when a state needs it.
+	STATES_INDEX_BUILT=0
+	: > "$index" || return 1
+	if states_restore_needs_roms "$target_format"; then
+		build_states_rom_index "$STATES_TABLE" "$index" || return 1
+		STATES_INDEX_BUILT=1
+	fi
 	awk -F'|' 'NF >= 3 && !seen[$3]++ { print $3 }' "$STATES_TABLE" > "$dirs"
 	while IFS= read -r core; do
 		[ -n "$core" ] && [ -d "$STATES_CORES/$core" ] || continue

@@ -7,7 +7,7 @@
   "repo_url": "https://github.com/bmpriest/nextui-retroarch-core-saves-pak",
   "release_filename": "RetroArch.Core.Saves.pak.zip",
   "changelog": {
-    "0.8.0": "Added Core States: save states join the Core Saves conversion (setting on by default). One Convert and one Revert handle saves and states in a single recoverable transaction with one backup and one mount layer, keeping states in /States/Cores for Syncthing and restoring the previous state format on revert.",
+    "0.8.0": "Added Core States: save states join the Core Saves conversion (setting on by default). One Convert and one Revert handle saves and states in a single recoverable transaction with one backup and one mount layer, keeping states in /States/Cores for Syncthing and restoring the previous state format on revert. A re-apply keeps a RetroArch state format you chose and never drops a running setup's states; slots NextUI cannot read (9 and above) stay in /States/Cores on revert.",
     "0.7.1": "Fixed an issue with minui-list crashing when wrapping from bottom to top.",
     "0.7.0": "Mounts now go through mountctl, the mount manager shared with Profiles.pak, so switching profiles never leaves Core Saves mounts stacked or blocks the switch. Fixes the mount count on h700.",
     "0.6.0": "Bigger update to add h700 support and fix compatibility issues with Profiles.pak and Netplay.pak",

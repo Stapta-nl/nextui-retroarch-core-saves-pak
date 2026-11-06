@@ -125,7 +125,7 @@ migrate_tag() {
 # it: one backup, one journal, one rollback and one set of mounts for both.
 enable_core_saves() {
 	local format state_format tmp tmp_states backup tag emu core states_on
-	local old_state_format states_backup
+	local old_state_format states_backup set_format
 
 	profiles_core_saves_allowed || return 1
 	format=$(get_save_format)
@@ -156,8 +156,19 @@ Report: $REPORT_FILE"
 
 	if $states_on; then
 		derive_states_table "$tmp" "$tmp_states" || {
-			states_on=false
 			rm -f "$tmp_states"
+			# A setup that already carries states must not lose them quietly: with
+			# no table the old mounts would come down and NextUI would stop seeing
+			# its states. Refuse before anything changes.
+			if states_active; then
+				rm -f "$tmp"
+				report_issue "No mapped emulator has a states folder (the emulators are gone or their launchers have no EMU_EXE), so the existing states setup was left exactly as it is."
+				finish_report
+				ACTION_RESULT="No mapped emulator has a states folder, so nothing was changed and your states are still mounted.
+Report: $REPORT_FILE"
+				return 1
+			fi
+			states_on=false
 			report_note "Core States is on, but no mapped emulator has a states folder to move."
 		}
 	fi
@@ -325,13 +336,23 @@ Report: $REPORT_FILE"
 	fi
 
 	if $states_on; then
-		set_state_format 3 || {
-			report_issue "Could not set RetroArch (compressed) state format."
-			finish_report
-			abort_operation "Could not set the state format.
+		# Formats 3 and 4 both use RetroArch's names, so a re-apply leaves a
+		# format the user switched to (4, uncompressed) alone. It is set to 3 when
+		# states are first enabled, or when the format is one that names files
+		# differently.
+		set_format=true
+		if states_active; then
+			case "$state_format" in 3|4) set_format=false ;; esac
+		fi
+		if $set_format; then
+			set_state_format 3 || {
+				report_issue "Could not set RetroArch (compressed) state format."
+				finish_report
+				abort_operation "Could not set the state format.
 Report: $REPORT_FILE"
-			return 1
-		}
+				return 1
+			}
+		fi
 	fi
 
 	mv "$tmp" "$MOUNT_TABLE" || {

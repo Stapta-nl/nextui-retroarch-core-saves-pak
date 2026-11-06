@@ -324,12 +324,14 @@ current_settings() {
 	state_format=$(state_format_name "$(get_state_format)")
 	states_status=$(states_mount_status)
 	states_location="/States/Cores"
-	# The setting is locked while a setup is running; it then shows what that
-	# setup includes rather than what the next one would.
+	# The setting is locked only while a setup with states is running: turning
+	# states off under it is not supported (there is no partial revert). A setup
+	# without states, or none at all, can still switch it, and turning it on is
+	# how an install from before Core States opts in through Re-apply.
 	core_states_locked=false
-	if [ -f "$ENABLED_FILE" ]; then
+	if states_active; then
 		core_states_locked=true
-		if states_active; then core_states_text="On (active)"; else core_states_text="Off"; fi
+		core_states_text="On (active)"
 	elif [ "$(core_states_setting)" = on ]; then
 		core_states_text="On"
 	else

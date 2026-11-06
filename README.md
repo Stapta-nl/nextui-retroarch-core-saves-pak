@@ -116,11 +116,12 @@ the other end), next to `/Saves/Cores` for saves. The NextUI folders under
 ### The setting
 
 The **Core States** row is under *State Status*. Select it to switch between On
-and Off; it only changes what the next conversion includes. While Core Saves is
-enabled the row is locked and shows what the running setup includes
-(`On (active)` or `Off`), so a setup is only ever changed by reverting and
-converting again. A setup made before Core States existed has no states in it;
-with the setting on, **Re-apply Core Save Mappings** appears and brings them in.
+and Off; it only changes what the next conversion includes. The row is locked
+only while the running setup includes states (`On (active)`): taking states out
+of a running setup is not supported, so that takes a revert and a new
+conversion. A setup without states, whether it was made before Core States
+existed or with the setting off, can switch the row on, and
+**Re-apply Core Save Mappings** then appears and brings the states in.
 
 ### Converting
 
@@ -152,14 +153,24 @@ because the NextUI folder is hidden under the mount afterwards.
 | 8 (NextUI's hidden default) | `Game.gba.st8` | `Game.state.8` | `Game.state8` |
 | Auto-resume | `Game.gba.st9` | `Game.state.auto` | `Game.state.auto` |
 
+NextUI only reads manual slots 0 to 7, its hidden default in 8, and the
+auto-resume state. Desktop RetroArch has more slots, so a state in slot 9 or
+above is not a NextUI state: it syncs and stays in `/States/Cores`, but NextUI
+cannot load it, and reverting to a NextUI format leaves it there (see below).
+
 Existing files are sorted by their own names rather than by the setting, because
 NextUI never converts old files when the setting changes. Converting is safe to
 repeat: it keeps the format recorded the first time, reuses identical files and
 only picks up states that appeared since. If two different files would get the
 same name, both are kept and the second becomes `Game.core-conflict-N.state`.
+Re-applying never lowers a state format you have switched to RetroArch
+(uncompressed) in NextUI's settings, and it refuses, changing nothing, when no
+mapped emulator has a states folder any more, instead of dropping the states
+from a running setup.
 
-Keep NextUI's state format on RetroArch while Core States is on. Another format
-makes NextUI write names desktop RetroArch will not read.
+Keep NextUI's state format on RetroArch (either one) while Core States is on.
+Another format makes NextUI write names desktop RetroArch will not read; a
+re-apply puts it back to RetroArch (compressed).
 
 ### Reverting
 
@@ -172,7 +183,8 @@ Syncthing would propagate the deletion.
   The MinUI format needs the ROM to recover the extension, so a state without
   exactly one matching ROM cannot be named for it. When several systems share a
   core (GB and GBC), each state needs exactly one ROM match to know which system it
-  belongs to. States that cannot be placed stay in `/States/Cores/<core>`, are
+  belongs to. States that cannot be placed, including desktop slots 9 and above
+  that no NextUI format can name, stay in `/States/Cores/<core>`, are
   listed in the conversion report, and **will not load in NextUI** until renamed.
 - **Keep**: leaves the format on RetroArch and copies states back under those names.
 
