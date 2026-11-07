@@ -508,6 +508,9 @@ refusing to hide files, and reverting.
 The suite uses the host executables in `bin/desktop/`, reached through the same
 `PATH`-based command lookup used on device.
 
+Verifying on a real device, with the evidence to attach to a pull request, is
+described in [docs/HARDWARE-TESTING.md](docs/HARDWARE-TESTING.md).
+
 ## Release Archive
 
 Build the release zip from committed files with:

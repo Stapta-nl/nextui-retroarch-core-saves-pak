@@ -26,6 +26,8 @@ dev:
 		-x "/dist/*" \
 		-x "/screenshots/*" \
 		-x "/Makefile" \
+		-x "/docs" \
+		-x "/docs/*" \
 		-x "/Findings.md" \
 		-x "/.gitignore" \
 		-x "/.gitattributes" \
