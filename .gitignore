@@ -1,2 +1,4 @@
 Findings.md
 /dist
+/tests/lib/
+/tests/devices.env

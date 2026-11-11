@@ -6,18 +6,25 @@
 
 set -u
 
-if [ "${CORE_SAVES_TEST_NS:-0}" != 1 ]; then
+# CORE_SAVES_TEST_REAL_MOUNTS=1 (the on-device run, as root) mounts in the real
+# mount namespace instead; the cleanup below unmounts everything under the
+# fixture. Also honoured: CORE_SAVES_TEST_PLATFORM, CORE_SAVES_TEST_TOOLS (the
+# jq of the platform under test) and CORE_SAVES_TEST_BASE (where the fixture goes).
+if [ "${CORE_SAVES_TEST_REAL_MOUNTS:-0}" = 1 ]; then
+	[ "$(id -u)" = 0 ] || { echo "real mounts need root" >&2; exit 1; }
+elif [ "${CORE_SAVES_TEST_NS:-0}" != 1 ]; then
 	command -v unshare >/dev/null 2>&1 || { echo "SKIP: unshare is not available"; exit 0; }
 	CORE_SAVES_TEST_NS=1 exec unshare -rm sh "$0" "$@"
 fi
 
-PAK_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
-TEST_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/core-saves-mounts.XXXXXX")
+# CORE_SAVES_TEST_PAK tests an installed pak (the on-device run) instead of this checkout.
+PAK_DIR=${CORE_SAVES_TEST_PAK:-$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)}
+TEST_ROOT=$(mktemp -d "${CORE_SAVES_TEST_BASE:-${TMPDIR:-/tmp}}/core-saves-mounts.XXXXXX")
 TEST_ROOT=$(CDPATH= cd -P -- "$TEST_ROOT" && pwd -P)
 
-PATH="$PAK_DIR/bin/desktop:$PATH"
+PATH="${CORE_SAVES_TEST_TOOLS:-$PAK_DIR/bin/desktop}:$PATH"
 SDCARD_PATH="$TEST_ROOT/sd"
-PLATFORM=desktop
+PLATFORM=${CORE_SAVES_TEST_PLATFORM:-desktop}
 SYSTEM_PATH="$SDCARD_PATH/.system/$PLATFORM"
 SHARED_USERDATA_PATH="$SDCARD_PATH/.userdata/shared"
 USERDATA_PATH="$SDCARD_PATH/.userdata/$PLATFORM"
@@ -29,14 +36,21 @@ TMPDIR="$TEST_ROOT"
 export PATH SDCARD_PATH PLATFORM SYSTEM_PATH SHARED_USERDATA_PATH USERDATA_PATH
 export LOGS_PATH CORE_SAVES_DIR CORE_SAVES_SOURCE_ONLY MOUNTS_LOCK TMPDIR
 
-cleanup() {
+test_cleanup() {
 	awk -v root="$TEST_ROOT" 'substr($5, 1, length(root) + 1) == root "/" { print length($5) " " $5 }' \
 		/proc/self/mountinfo | sort -rn | cut -d' ' -f2- | while IFS= read -r path; do
 		umount "$path" 2>/dev/null || true
 	done
-	rm -rf "$TEST_ROOT"
+	# CORE_SAVES_TEST_KEEP=1 keeps the fixture of a failed run for the debug bundle.
+	if [ "${CORE_SAVES_TEST_KEEP:-0}" = 1 ] && [ "$1" != 0 ]; then
+		echo "fixture kept for the debug bundle: $TEST_ROOT" >&2
+	else
+		rm -rf "$TEST_ROOT"
+	fi
 }
-trap cleanup EXIT
+trap 'test_cleanup $?' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 fail() {
 	echo "FAIL: $*" >&2
@@ -71,6 +85,9 @@ printf 'saveFormat=3\n' > "$SHARED_USERDATA_PATH/minuisettings.txt"
 echo advance > "$SDCARD_PATH/Saves/Cores/gpSP/Advance.srm"
 
 . "$PAK_DIR/launch.sh"
+# Sourcing launch.sh sources mountctl.sh, which installs its own EXIT trap; without
+# this the fixture was never removed. Keep its cleanup, then ours.
+trap 'rc=$?; if command -v mc_cleanup >/dev/null 2>&1; then mc_cleanup; fi; test_cleanup "$rc"' EXIT
 show_progress() { :; }
 
 # A 0.6 install: enabled, its own hook and helper, and the tag folder mounted
@@ -129,3 +146,76 @@ assert_eq "$(cat "$SAVES_PATH/GB/Mono.gb.sav")" "mono"
 [ -e "$MOUNTS_HOME/mountctl.sh" ] && fail "mountctl left behind"
 
 echo "PASS: Core Saves with real mounts"
+# --- Core States in the same transaction, with real mounts --------------------
+# One layer mounts both: the tag folders in /Saves and the NextUI states folders
+# in shared data, which the same layer also reads its tables from.
+STATE_TARGET="$SHARED_USERDATA_PATH/GBA-gpsp"
+STATE_TREE="$SDCARD_PATH/States/Cores/gpSP"
+printf 'saveFormat=3\nstateFormat=0\n' > "$SHARED_USERDATA_PATH/minuisettings.txt"
+printf 'core_states=on\n' > "$FEATURES_FILE"
+mkdir -p "$STATE_TARGET" "$ROMS_PATH/Game Boy Advance (GBA)"
+: > "$ROMS_PATH/Game Boy Advance (GBA)/Advance.gba"
+echo slot0 > "$STATE_TARGET/Advance.gba.st0"
+echo auto > "$STATE_TARGET/Advance.gba.st9"
+
+enable_core_saves || fail "enable saves and states: $ACTION_RESULT"
+assert_eq "$(enabled_value states)" "1"
+assert_eq "$(mount_count "$STATE_TARGET")" "1"
+assert_eq "$(mount_count "$SAVES_PATH/GBA")" "1"
+assert_eq "$(states_mount_status)" "2/2 mounted"
+# What NextUI sees through the mount is the RetroArch-named file in the tree.
+assert_eq "$(cat "$STATE_TARGET/Advance.state")" "slot0"
+assert_eq "$(cat "$STATE_TARGET/Advance.state.auto")" "auto"
+assert_eq "$(cat "$STATE_TREE/Advance.state")" "slot0"
+# A system whose NextUI folder did not exist before enabling is mounted too, so
+# the first state it ever saves goes straight into the synced tree.
+echo first > "$SHARED_USERDATA_PATH/GB-gambatte/First.state"
+assert_eq "$(cat "$SDCARD_PATH/States/Cores/Gambatte/First.state")" "first"
+rm "$SHARED_USERDATA_PATH/GB-gambatte/First.state"
+# A state written through the mount lands in the synced tree.
+echo new > "$STATE_TARGET/Advance.state2"
+assert_eq "$(cat "$STATE_TREE/Advance.state2")" "new"
+assert_eq "$(get_state_format)" "3"
+[ -f "$MOUNTS_HOME/layers.d/20-core-saves.sh" ] || fail "the layer should be installed"
+[ -e "$MOUNTS_HOME/layers.d/30-core-states.sh" ] && fail "states got a second layer"
+
+# Boot brings everything back, and re-applying is stable.
+sh "$MOUNTS_HOME/mountctl.sh" down || fail "down failed"
+assert_eq "$(mount_count "$STATE_TARGET")" "0"
+assert_eq "$(mount_count "$SAVES_PATH/GBA")" "0"
+sh "$MOUNTS_HOOK" || fail "boot hook failed"
+assert_eq "$(mount_count "$STATE_TARGET")" "1"
+assert_eq "$(mount_count "$SAVES_PATH/GBA")" "1"
+sh "$MOUNTS_HOME/mountctl.sh" apply || fail "re-apply failed"
+assert_eq "$(mount_count "$STATE_TARGET")" "1"
+
+# A states folder that gained files while unmounted is not hidden.
+sh "$MOUNTS_HOME/mountctl.sh" down || fail "down failed"
+echo stray > "$STATE_TARGET/stray.state"
+sh "$MOUNTS_HOOK" >/dev/null && fail "boot mounted over a states folder with files in it"
+assert_eq "$(mount_count "$STATE_TARGET")" "0"
+[ -f "$STATE_TARGET/stray.state" ] || fail "stray state disappeared"
+rm "$STATE_TARGET/stray.state"
+sh "$MOUNTS_HOOK" || fail "remount failed"
+
+# Enabling again with everything mounted changes nothing.
+enable_core_saves || fail "enable again: $ACTION_RESULT"
+assert_eq "$(mount_count "$STATE_TARGET")" "1"
+assert_eq "$(enabled_value old_state_format)" "0"
+assert_eq "$(find "$STATE_TREE" -type f | wc -l | tr -d ' ')" "3"
+
+# Reverting unmounts both kinds, puts the format back and renames the states,
+# and removes the layer, and with it mountctl, since no other pak has one.
+RESTORE_STATE_FORMAT=restore
+restore_to_legacy current || fail "revert: $ACTION_RESULT"
+assert_eq "$(mount_count "$STATE_TARGET")" "0"
+assert_eq "$(mount_count "$SAVES_PATH/GBA")" "0"
+assert_eq "$(cat "$STATE_TARGET/Advance.gba.st0")" "slot0"
+assert_eq "$(cat "$STATE_TARGET/Advance.gba.st9")" "auto"
+assert_eq "$(cat "$STATE_TARGET/Advance.gba.st2")" "new"
+assert_eq "$(get_state_format)" "0"
+[ -e "$MOUNT_LAYER_FILE" ] && fail "layer left installed after revert"
+[ -e "$MOUNTS_HOME/mountctl.sh" ] && fail "mountctl left behind"
+assert_eq "$(cat "$STATE_TREE/Advance.state")" "slot0"
+
+echo "PASS: Core States with real mounts"

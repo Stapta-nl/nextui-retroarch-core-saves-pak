@@ -1,0 +1,29 @@
+# Collected on the device after every on-device run (see tests/collect.sh for the format).
+# One collector per line: <output file> | <command>. Runs in the unpacked test bundle with
+# PLATFORM, PAK_NAME, SRC_PAK (the installed pak) and SDCARD_PATH set; $SD is the SD card.
+# Plain POSIX sh: it must work on BusyBox.
+#
+# Only small text files and listings are collected by default. The real states and saves are
+# never copied unless COLLECT_USER_DATA=1 (see the last collector).
+uname.txt | uname -a
+os-release.txt | cat /etc/os-release 2>/dev/null || cat /etc/openwrt_release
+busybox-version.txt | ls -l /bin/sh; strings /bin/busybox 2>/dev/null | grep -m 1 '^BusyBox v' || echo 'BusyBox version not found'
+bash-version.txt | bash --version | head -n 1
+nextui-version.txt | cat "$SD/.system/version.txt"
+required-tools.txt | for t in sh bash tar gzip mktemp awk sed sort uniq cut find mount umount cmp stat nl pgrep killall unshare sha256sum; do printf '%s: ' "$t"; command -v "$t" || echo MISSING; done
+df.txt | df -h
+mountinfo.txt | cat /proc/self/mountinfo
+mounts-below-saves.txt | awk -v r="$SD/Saves" 'substr($5, 1, length(r) + 1) == r "/" { print $5 }' /proc/self/mountinfo
+mounts-below-shared.txt | awk -v r="$SD/.userdata/shared" 'substr($5, 1, length(r) + 1) == r "/" { print $5 }' /proc/self/mountinfo
+pak.json | cat "$SRC_PAK/pak.json"
+pak-binaries.txt | ls -l "$SRC_PAK/bin/$PLATFORM"
+minuisettings.txt | grep -E '^(stateFormat|saveFormat)=' "$SD/.userdata/shared/minuisettings.txt"
+core-saves-log.txt | tail -n 500 "$SD/.userdata/$PLATFORM/logs/core-saves.txt"
+mounts-log.txt | tail -n 500 "$SD/.userdata/$PLATFORM/logs/mounts.txt"
+pak-home.txt | h="$SD/.userdata/shared/$PAK_NAME"; for f in enabled features.conf mounts.conf migration.manifest conversion-report.txt operation-state; do echo "=== $f"; cat "$h/$f" 2>&1; done; echo "=== operation.journal (tail)"; tail -n 100 "$h/operation.journal" 2>&1
+states-listing.txt | find "$SD/States/Cores" -type f -exec ls -l {} + 2>&1
+states-checksums.txt | find "$SD/States/Cores" -type f -exec cksum {} + 2>&1
+saves-listing.txt | find "$SD/Saves/Cores" -type f -exec ls -l {} + 2>&1
+legacy-states-listing.txt | ls -lA "$SD/.userdata/shared" 2>&1
+backups.txt | ls -lA "$SD/.core-saves-backups" 2>&1
+user-data.tar.gz | if [ "${COLLECT_USER_DATA:-0}" != 1 ]; then echo "not collected: set COLLECT_USER_DATA=1 to copy States/Cores and Saves/Cores" >&2; exit 0; fi; kb=$(du -sk "$SD/States/Cores" "$SD/Saves/Cores" 2>/dev/null | awk '{ s += $1 } END { print s + 0 }'); if [ "$kb" -gt "${USER_DATA_MAX_KB:-65536}" ]; then echo "not collected: $kb KB is over USER_DATA_MAX_KB=${USER_DATA_MAX_KB:-65536}" >&2; exit 0; fi; tar -czf - -C "$SD" States/Cores Saves/Cores 2>/dev/null

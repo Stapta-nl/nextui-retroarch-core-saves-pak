@@ -2,14 +2,19 @@
 
 set -eu
 
-PAK_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
-TEST_ROOT=${TMPDIR:-/tmp}/core-saves-tests.$$
-trap 'rm -rf "$TEST_ROOT"' EXIT INT TERM
+# CORE_SAVES_TEST_PAK tests an installed pak (the on-device run) instead of this checkout.
+PAK_DIR=${CORE_SAVES_TEST_PAK:-$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)}
+TEST_PLATFORM=${CORE_SAVES_TEST_PLATFORM:-desktop}
+TEST_TOOLS=${CORE_SAVES_TEST_TOOLS:-$PAK_DIR/bin/desktop}
+TEST_ROOT=${CORE_SAVES_TEST_BASE:-${TMPDIR:-/tmp}}/core-saves-tests.$$
+trap 'rc=$?; if [ "${CORE_SAVES_TEST_KEEP:-0}" = 1 ] && [ "$rc" != 0 ]; then echo "fixture kept for the debug bundle: $TEST_ROOT" >&2; else rm -rf "$TEST_ROOT"; fi' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 mkdir -p "$TEST_ROOT"
 # mountctl compares resolved paths, so the fixtures must use them too.
 TEST_ROOT=$(CDPATH= cd -P -- "$TEST_ROOT" && pwd -P)
 
-PATH="$PAK_DIR/bin/desktop:$PATH"
+PATH="$TEST_TOOLS:$PATH"
 export PATH
 
 fail() {
@@ -44,12 +49,12 @@ assert_value() {
 }
 
 mkdir -p "$TEST_ROOT"
-command -v jq >/dev/null 2>&1 || fail "missing bin/desktop/jq"
-command -v save-rzip >/dev/null 2>&1 || fail "missing bin/desktop/save-rzip"
-[ "$(command -v jq)" = "$PAK_DIR/bin/desktop/jq" ] ||
-	fail "tests are not using bin/desktop/jq"
-[ "$(command -v save-rzip)" = "$PAK_DIR/bin/desktop/save-rzip" ] ||
-	fail "tests are not using bin/desktop/save-rzip"
+command -v jq >/dev/null 2>&1 || fail "missing jq in $TEST_TOOLS"
+command -v save-rzip >/dev/null 2>&1 || fail "missing save-rzip in $TEST_TOOLS"
+[ "$(command -v jq)" = "$TEST_TOOLS/jq" ] ||
+	fail "tests are not using $TEST_TOOLS/jq"
+[ "$(command -v save-rzip)" = "$TEST_TOOLS/save-rzip" ] ||
+	fail "tests are not using $TEST_TOOLS/save-rzip"
 
 write_emulator() {
 	root="$1"
@@ -90,7 +95,7 @@ wrap_emulator_like_netplay() {
 load_fixture() {
 	name="$1"
 	SDCARD_PATH="$TEST_ROOT/$name/sd"
-	PLATFORM=desktop
+	PLATFORM=$TEST_PLATFORM
 	SYSTEM_PATH="$SDCARD_PATH/.system/$PLATFORM"
 	SHARED_USERDATA_PATH="$SDCARD_PATH/.userdata/shared"
 	USERDATA_PATH="$SDCARD_PATH/.userdata/$PLATFORM"
@@ -111,6 +116,8 @@ load_fixture() {
 	. "$CORE_SAVES_DIR/launch.sh"
 	show_progress() { :; }
 	run_mounts() { :; }
+	# These tests are about saves; the Core States tests turn the setting on.
+	printf 'core_states=off\n' > "$FEATURES_FILE"
 }
 
 test_minui_to_core_and_generic_restore() (
@@ -153,9 +160,9 @@ test_minui_to_core_and_generic_restore() (
 			.settings[4].options == ["0/3 mounted"] and
 			.settings[4].features.unselectable == true and
 			(.settings[4].features | has("show_confirm") | not) and
-			(.settings | length) == 7 and
-			.settings[6].name == "Revert to NextUI Saves" and
-			.settings[6].features.unselectable == false and
+			(.settings | length) == 12 and
+			.settings[11].name == "Revert to NextUI Saves" and
+			.settings[11].features.unselectable == false and
 			.conversions[1].name == ".srm" and
 			(has("selected") | not)
 		' "$TEST_ROOT/menu-test.json" >/dev/null ||
@@ -412,9 +419,9 @@ test_inactive_menu_state() (
 		.settings[4].options == ["0 mounted"] and
 		.settings[4].features.unselectable == true and
 		(.settings[4].features | has("show_confirm") | not) and
-		(.settings | length) == 7 and
-		.settings[6].name == "Convert to RetroArch Core Saves" and
-		.settings[6].features.unselectable == false and
+		(.settings | length) == 12 and
+		.settings[11].name == "Convert to RetroArch Core Saves" and
+		.settings[11].features.unselectable == false and
 		.conversions[1].name == ".<pak>.sav" and
 		(has("selected") | not)
 	' "$TEST_ROOT/inactive-menu.json" >/dev/null ||
@@ -448,10 +455,10 @@ test_active_mount_rows_include_unmapped_folders() (
 		.settings[4].features.unselectable == false and
 		.settings[4].features.show_confirm == true and
 		.settings[4].features.confirm_text == "View" and
-		(.settings | length) == 8 and
-		.settings[5].name == " " and
-		.settings[6].name == "Re-apply Core Save Mappings" and
-		.settings[7].name == "Revert to NextUI Saves" and
+		(.settings | length) == 13 and
+		.settings[10].name == " " and
+		.settings[11].name == "Re-apply Core Save Mappings" and
+		.settings[12].name == "Revert to NextUI Saves" and
 		(.mounts | length) == 7 and
 		([.mounts[] | select(.name == " /FC" and .options[0] == " /FCEUmm")] | length) == 1 and
 		([.mounts[] | select(.name == " /GB" and .options[0] == " /Gambatte")] | length) == 1 and
@@ -1002,11 +1009,11 @@ test_reapply_row_completes_partial_mappings() (
 	jq -e '
 		.settings[3].name == "> Mappings:" and
 		.settings[3].options == ["3/4"] and
-		(.settings | length) == 8 and
-		.settings[6].name == "Re-apply Core Save Mappings" and
-		.settings[6].features.unselectable == false and
-		.settings[7].name == "Revert to NextUI Saves" and
-		.settings[7].features.unselectable == false
+		(.settings | length) == 13 and
+		.settings[11].name == "Re-apply Core Save Mappings" and
+		.settings[11].features.unselectable == false and
+		.settings[12].name == "Revert to NextUI Saves" and
+		.settings[12].features.unselectable == false
 	' "$TEST_ROOT/partial-before.json" >/dev/null ||
 		fail "incomplete mappings did not surface the re-apply action"
 
@@ -1016,8 +1023,8 @@ test_reapply_row_completes_partial_mappings() (
 	current_settings > "$TEST_ROOT/partial-pending.json"
 	jq -e '
 		.settings[3].options == ["4/4"] and
-		(.settings | length) == 8 and
-		.settings[6].name == "Re-apply Core Save Mappings"
+		(.settings | length) == 13 and
+		.settings[11].name == "Re-apply Core Save Mappings"
 	' "$TEST_ROOT/partial-pending.json" >/dev/null ||
 		fail "re-apply action vanished before the mapping was applied"
 
@@ -1036,8 +1043,8 @@ test_reapply_row_completes_partial_mappings() (
 	current_settings > "$TEST_ROOT/partial-after.json"
 	jq -e '
 		.settings[3].options == ["4/4"] and
-		(.settings | length) == 7 and
-		.settings[6].name == "Revert to NextUI Saves"
+		(.settings | length) == 12 and
+		.settings[11].name == "Revert to NextUI Saves"
 	' "$TEST_ROOT/partial-after.json" >/dev/null ||
 		fail "re-apply action persisted after mappings were complete"
 )
@@ -1090,12 +1097,12 @@ test_profile_rows_show_the_canonical_path() (
 
 	current_settings > "$TEST_ROOT/profile-menu.json"
 	jq -e '
-		(.settings | length) == 8 and
+		(.settings | length) == 13 and
 		.settings[1].name == "> Profile:" and
 		.settings[1].options == ["Ben"] and
 		.settings[3].name == "> Location:" and
 		.settings[3].options == [".profiles/Ben/Saves"] and
-		.settings[7].name == "Convert to RetroArch Core Saves"
+		.settings[12].name == "Convert to RetroArch Core Saves"
 	' "$TEST_ROOT/profile-menu.json" >/dev/null ||
 		fail "profile menu state is incorrect"
 

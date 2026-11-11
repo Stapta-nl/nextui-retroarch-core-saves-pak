@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  checks: write
+
+jobs:
+  test:
+    name: Host tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends jq shellcheck unzip file
+
+      # Core Saves and Core States run real bind mounts inside `unshare -rm`. Ubuntu 24.04
+      # restricts unprivileged user namespaces by default; allow them for this job so the
+      # mount suite runs instead of skipping.
+      - name: Allow unprivileged user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Release archive
+        run: make release
+
+      # make test checks the repository and the release archive (RELEASE_ZIP) and runs the sh
+      # suites, including real bind mounts. The mount suite must not skip in CI.
+      - name: make test
+        run: make test RELEASE_ZIP="dist/RetroArch Core Saves.pak.zip"
+
+      - name: Mount suite ran (did not skip)
+        if: always()
+        run: |
+          if grep -q 'skip unshare' dist/test-out/host/output.tap 2>/dev/null; then
+            echo "::error::the real-mount suite was skipped"
+            exit 1
+          fi
+
+      - name: Test report
+        if: always()
+        uses: dorny/test-reporter@v1.9.1
+        with:
+          name: bats
+          path: dist/test-out/host/junit/report.xml
+          reporter: java-junit
+          fail-on-error: false
+
+      - name: Job summary
+        if: always()
+        run: cat dist/test-out/host/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Debug bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report-host
+          path: dist/test-report-host-*.tar.gz
+          if-no-files-found: warn
