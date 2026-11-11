@@ -6,18 +6,25 @@
 
 set -u
 
-if [ "${CORE_SAVES_TEST_NS:-0}" != 1 ]; then
+# CORE_SAVES_TEST_REAL_MOUNTS=1 (the on-device run, as root) mounts in the real
+# mount namespace instead; the cleanup below unmounts everything under the
+# fixture. Also honoured: CORE_SAVES_TEST_PLATFORM, CORE_SAVES_TEST_TOOLS (the
+# jq of the platform under test) and CORE_SAVES_TEST_BASE (where the fixture goes).
+if [ "${CORE_SAVES_TEST_REAL_MOUNTS:-0}" = 1 ]; then
+	[ "$(id -u)" = 0 ] || { echo "real mounts need root" >&2; exit 1; }
+elif [ "${CORE_SAVES_TEST_NS:-0}" != 1 ]; then
 	command -v unshare >/dev/null 2>&1 || { echo "SKIP: unshare is not available"; exit 0; }
 	CORE_SAVES_TEST_NS=1 exec unshare -rm sh "$0" "$@"
 fi
 
-PAK_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
-TEST_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/core-saves-mounts.XXXXXX")
+# CORE_SAVES_TEST_PAK tests an installed pak (the on-device run) instead of this checkout.
+PAK_DIR=${CORE_SAVES_TEST_PAK:-$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)}
+TEST_ROOT=$(mktemp -d "${CORE_SAVES_TEST_BASE:-${TMPDIR:-/tmp}}/core-saves-mounts.XXXXXX")
 TEST_ROOT=$(CDPATH= cd -P -- "$TEST_ROOT" && pwd -P)
 
-PATH="$PAK_DIR/bin/desktop:$PATH"
+PATH="${CORE_SAVES_TEST_TOOLS:-$PAK_DIR/bin/desktop}:$PATH"
 SDCARD_PATH="$TEST_ROOT/sd"
-PLATFORM=desktop
+PLATFORM=${CORE_SAVES_TEST_PLATFORM:-desktop}
 SYSTEM_PATH="$SDCARD_PATH/.system/$PLATFORM"
 SHARED_USERDATA_PATH="$SDCARD_PATH/.userdata/shared"
 USERDATA_PATH="$SDCARD_PATH/.userdata/$PLATFORM"
@@ -29,14 +36,21 @@ TMPDIR="$TEST_ROOT"
 export PATH SDCARD_PATH PLATFORM SYSTEM_PATH SHARED_USERDATA_PATH USERDATA_PATH
 export LOGS_PATH CORE_SAVES_DIR CORE_SAVES_SOURCE_ONLY MOUNTS_LOCK TMPDIR
 
-cleanup() {
+test_cleanup() {
 	awk -v root="$TEST_ROOT" 'substr($5, 1, length(root) + 1) == root "/" { print length($5) " " $5 }' \
 		/proc/self/mountinfo | sort -rn | cut -d' ' -f2- | while IFS= read -r path; do
 		umount "$path" 2>/dev/null || true
 	done
-	rm -rf "$TEST_ROOT"
+	# CORE_SAVES_TEST_KEEP=1 keeps the fixture of a failed run for the debug bundle.
+	if [ "${CORE_SAVES_TEST_KEEP:-0}" = 1 ] && [ "$1" != 0 ]; then
+		echo "fixture kept for the debug bundle: $TEST_ROOT" >&2
+	else
+		rm -rf "$TEST_ROOT"
+	fi
 }
-trap cleanup EXIT
+trap 'test_cleanup $?' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 fail() {
 	echo "FAIL: $*" >&2
@@ -71,6 +85,9 @@ printf 'saveFormat=3\n' > "$SHARED_USERDATA_PATH/minuisettings.txt"
 echo advance > "$SDCARD_PATH/Saves/Cores/gpSP/Advance.srm"
 
 . "$PAK_DIR/launch.sh"
+# Sourcing launch.sh sources mountctl.sh, which installs its own EXIT trap; without
+# this the fixture was never removed. Keep its cleanup, then ours.
+trap 'rc=$?; if command -v mc_cleanup >/dev/null 2>&1; then mc_cleanup; fi; test_cleanup "$rc"' EXIT
 show_progress() { :; }
 
 # A 0.6 install: enabled, its own hook and helper, and the tag folder mounted

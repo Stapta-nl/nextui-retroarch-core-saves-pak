@@ -494,22 +494,76 @@ Their license texts are included under `bin/`.
 
 ## Tests
 
-Run all suites with `make test` (the Core Saves, mount and Core States suites), or the host-side migration suite alone with:
+The tests are [bats](https://github.com/bats-core/bats-core) tests under `tests/bats/`, tagged
+`host` or `device`. bats-core and its helpers are downloaded at pinned versions into `tests/lib`
+(git-ignored) by the Makefile; you need `jq`, `curl`, `tar` and `unzip`. Nothing in the runners
+is specific to this pak: the platforms come from `pak.json`, so a new platform there gets its
+own `make` target and device settings without a change to the Makefile.
 
 ```sh
-"RetroArch Core Saves.pak/bin/tests/test-core-saves.sh"
+make test                       # host tests: runs locally and in CI, never opens an ssh connection
+make test-device                # on-device tests on every device you configured
+make test-device-h700           # one device (tg5040, tg5050, h700, my285: every platform in pak.json)
+make test MENU_TESTS=1 ...      # see "Menu tests" below
 ```
 
-`bin/tests/test-core-saves-mounts.sh` re-runs itself under `unshare -rm`, a
-private user and mount namespace, to make real bind mounts without root: moving
-a 0.6 install onto mountctl, re-applying with the tag folders mounted, boot,
-refusing to hide files, and reverting.
+**Host tests** (`make test`): the three sh suites in `bin/tests/` (Core Saves, Core States, and
+both with real bind mounts under `unshare -rm`, which skips and says so when user namespaces are
+not available), plus repository checks: `pak.json` and the changelog, the binaries of every
+platform (present, right CPU architecture, `bin/SHA256SUMS`), `tests/devices.env.example`
+against the platforms, the release archive contents (no tests, docs or `bin/desktop`), and
+shellcheck on the test scripts. The host suites use the executables in `bin/desktop/`.
 
-The suite uses the host executables in `bin/desktop/`, reached through the same
-`PATH`-based command lookup used on device.
+**On-device tests** (`make test-device-<platform>`): run over ssh against the pak as installed in
+`Tools/<platform>/<name>.pak`. The same three sh suites run on the device's own BusyBox `sh`, with
+the platform's own `jq` and `save-rzip` and with **real bind mounts**, which is what finds
+differences in awk, sed, find, mount and the kernel that no host run can. They only ever touch a
+throw-away fixture tree under `/mnt/SDCARD/.core-states-tests`: your real states, saves and
+settings are read (a survey test, for the debug bundle) and never changed. The fixtures are
+removed afterwards, and a test checks that nothing is left mounted.
 
-Verifying on a real device, with the evidence to attach to a pull request, is
-described in [docs/HARDWARE-TESTING.md](docs/HARDWARE-TESTING.md).
+Configure devices in `tests/devices.env` (copy `tests/devices.env.example`; git-ignored):
+
+```sh
+H700_HOST ?= root@anbernic.local        # key-based ssh login, no password prompt
+H700_SSH_OPTS ?= -i ~/.ssh/anbernic
+```
+
+Unconfigured devices are skipped by `make test-device`; a configured but unreachable one is an
+error. ssh runs with `BatchMode=yes` and a connect timeout; the test bundle is streamed over ssh
+(no scp/sftp needed) and the temporary directory on the device is removed even on Ctrl-C.
+
+**Menu tests** (`MENU_TESTS=1`, off by default): `tests/bats/device-menu.bats` starts the real
+pak through NextUI's launcher and drives its real menu with injected gamepad events, against the
+fixture tree. It takes over the screen for a few seconds and restarts NextUI's UI. The gamepad
+defaults to the TrimUI pad (tg5040, tg5050); for `h700` and `my285` set `PAD_NAME` or
+`PAD_DEVICE` (and `PAD_A`, `PAD_B`, `PAD_UP`, `PAD_DOWN` if the button codes differ), see
+`tests/devices.env.example`. These tests are written but have not been run on a device yet.
+
+**Debug bundle.** Every run, passing, failing or interrupted, writes
+`dist/test-report-<target>-<timestamp>.tar.gz` with `summary.md`, the JUnit and TAP output, the
+logs, the pak's own state on the device (settings, features, mount table, conversion report,
+journal, logs), listings and checksums of `/States/Cores` and `/Saves/Cores`, system information
+and, for a failed suite, the fixture tree it was working on. The device's address, what ssh
+resolves it to and the host machine's name are removed. The real states and saves are **not**
+copied unless you ask: `COLLECT_USER_DATA=1` adds a `user-data.tar.gz` of `/States/Cores` and
+`/Saves/Cores` (up to `USER_DATA_MAX_KB`, default 64 MB). Attach the bundle when reporting a
+problem; check it first if your saves are private.
+
+**CI** (`.github/workflows/ci.yaml`) runs `make test` against the release archive on every pull
+request, reports the per-test results, appends `summary.md` to the job summary and uploads the
+debug bundle. It fails if the real-mount suite was skipped.
+
+Settings the suites honour, for running one by hand: `CORE_SAVES_TEST_PLATFORM`,
+`CORE_SAVES_TEST_TOOLS` (the directory with `jq` and `save-rzip`), `CORE_SAVES_TEST_PAK` (an
+installed pak instead of this checkout), `CORE_SAVES_TEST_BASE` (where the fixture goes),
+`CORE_SAVES_TEST_REAL_MOUNTS=1` (root, mounts in the real namespace instead of `unshare`) and
+`CORE_SAVES_TEST_KEEP=1` (keep the fixture of a failed run).
+
+The manual steps that cannot be automated (a real power loss, desktop RetroArch reading the
+renamed states, Profiles.pak, Syncthing) remain in
+[docs/HARDWARE-TESTING.md](docs/HARDWARE-TESTING.md), together with the evidence to attach to a
+pull request.
 
 ## Release Archive
 

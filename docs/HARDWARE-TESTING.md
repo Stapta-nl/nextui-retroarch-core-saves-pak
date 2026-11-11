@@ -40,6 +40,16 @@ Facts taken from the NextUI source rather than a device: states live in
 hidden default, slot 9 is the auto-resume slot; MinArch reads compressed and raw
 states alike; the setting key is `stateFormat` in `minuisettings.txt`.
 
+## Automated checks on the device first
+
+Before the manual steps, run the automated on-device tests (`make test-device-<platform>`,
+see the Tests section of the README). They run the three sh suites on the device itself, with
+the real `jq`, BusyBox and kernel mounts, against a throw-away fixture, and they never touch your
+real states. A pass there rules out the "does it run at all on this firmware" problems, so the
+manual steps below only have to cover what needs a person: NextUI picking up the format change,
+the real library, profiles, power loss and desktop RetroArch. Attach the debug bundle
+(`dist/test-report-<platform>-*.tar.gz`) to the pull request.
+
 ## Before you start
 
 1. **Copy the SD card's `Saves/`, `States/` (if it exists), `Roms/` listing and

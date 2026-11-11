@@ -5,13 +5,18 @@
 
 set -eu
 
-PAK_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
-TEST_ROOT=${TMPDIR:-/tmp}/core-states-tests.$$
-trap 'rm -rf "$TEST_ROOT"' EXIT INT TERM
+# CORE_SAVES_TEST_PAK tests an installed pak (the on-device run) instead of this checkout.
+PAK_DIR=${CORE_SAVES_TEST_PAK:-$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)}
+TEST_PLATFORM=${CORE_SAVES_TEST_PLATFORM:-desktop}
+TEST_TOOLS=${CORE_SAVES_TEST_TOOLS:-$PAK_DIR/bin/desktop}
+TEST_ROOT=${CORE_SAVES_TEST_BASE:-${TMPDIR:-/tmp}}/core-states-tests.$$
+trap 'rc=$?; if [ "${CORE_SAVES_TEST_KEEP:-0}" = 1 ] && [ "$rc" != 0 ]; then echo "fixture kept for the debug bundle: $TEST_ROOT" >&2; else rm -rf "$TEST_ROOT"; fi' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 mkdir -p "$TEST_ROOT"
 TEST_ROOT=$(CDPATH= cd -P -- "$TEST_ROOT" && pwd -P)
 
-PATH="$PAK_DIR/bin/desktop:$PATH"
+PATH="$TEST_TOOLS:$PATH"
 export PATH
 
 fail() {
@@ -45,7 +50,7 @@ assert_content() {
 	[ "$(cat "$1")" = "$2" ] || fail "$1 holds '$(cat "$1")', expected '$2'"
 }
 
-command -v jq >/dev/null 2>&1 || fail "missing bin/desktop/jq"
+command -v jq >/dev/null 2>&1 || fail "missing jq in $TEST_TOOLS"
 
 write_emulator() {
 	path="$1/.system/$PLATFORM/paks/Emus/$2.pak"
@@ -56,7 +61,7 @@ write_emulator() {
 load_fixture() {
 	name="$1"
 	SDCARD_PATH="$TEST_ROOT/$name/sd"
-	PLATFORM=desktop
+	PLATFORM=$TEST_PLATFORM
 	SYSTEM_PATH="$SDCARD_PATH/.system/$PLATFORM"
 	SHARED_USERDATA_PATH="$SDCARD_PATH/.userdata/shared"
 	USERDATA_PATH="$SDCARD_PATH/.userdata/$PLATFORM"

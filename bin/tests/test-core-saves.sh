@@ -2,14 +2,19 @@
 
 set -eu
 
-PAK_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
-TEST_ROOT=${TMPDIR:-/tmp}/core-saves-tests.$$
-trap 'rm -rf "$TEST_ROOT"' EXIT INT TERM
+# CORE_SAVES_TEST_PAK tests an installed pak (the on-device run) instead of this checkout.
+PAK_DIR=${CORE_SAVES_TEST_PAK:-$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)}
+TEST_PLATFORM=${CORE_SAVES_TEST_PLATFORM:-desktop}
+TEST_TOOLS=${CORE_SAVES_TEST_TOOLS:-$PAK_DIR/bin/desktop}
+TEST_ROOT=${CORE_SAVES_TEST_BASE:-${TMPDIR:-/tmp}}/core-saves-tests.$$
+trap 'rc=$?; if [ "${CORE_SAVES_TEST_KEEP:-0}" = 1 ] && [ "$rc" != 0 ]; then echo "fixture kept for the debug bundle: $TEST_ROOT" >&2; else rm -rf "$TEST_ROOT"; fi' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 mkdir -p "$TEST_ROOT"
 # mountctl compares resolved paths, so the fixtures must use them too.
 TEST_ROOT=$(CDPATH= cd -P -- "$TEST_ROOT" && pwd -P)
 
-PATH="$PAK_DIR/bin/desktop:$PATH"
+PATH="$TEST_TOOLS:$PATH"
 export PATH
 
 fail() {
@@ -44,12 +49,12 @@ assert_value() {
 }
 
 mkdir -p "$TEST_ROOT"
-command -v jq >/dev/null 2>&1 || fail "missing bin/desktop/jq"
-command -v save-rzip >/dev/null 2>&1 || fail "missing bin/desktop/save-rzip"
-[ "$(command -v jq)" = "$PAK_DIR/bin/desktop/jq" ] ||
-	fail "tests are not using bin/desktop/jq"
-[ "$(command -v save-rzip)" = "$PAK_DIR/bin/desktop/save-rzip" ] ||
-	fail "tests are not using bin/desktop/save-rzip"
+command -v jq >/dev/null 2>&1 || fail "missing jq in $TEST_TOOLS"
+command -v save-rzip >/dev/null 2>&1 || fail "missing save-rzip in $TEST_TOOLS"
+[ "$(command -v jq)" = "$TEST_TOOLS/jq" ] ||
+	fail "tests are not using $TEST_TOOLS/jq"
+[ "$(command -v save-rzip)" = "$TEST_TOOLS/save-rzip" ] ||
+	fail "tests are not using $TEST_TOOLS/save-rzip"
 
 write_emulator() {
 	root="$1"
@@ -90,7 +95,7 @@ wrap_emulator_like_netplay() {
 load_fixture() {
 	name="$1"
 	SDCARD_PATH="$TEST_ROOT/$name/sd"
-	PLATFORM=desktop
+	PLATFORM=$TEST_PLATFORM
 	SYSTEM_PATH="$SDCARD_PATH/.system/$PLATFORM"
 	SHARED_USERDATA_PATH="$SDCARD_PATH/.userdata/shared"
 	USERDATA_PATH="$SDCARD_PATH/.userdata/$PLATFORM"
